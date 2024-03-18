@@ -472,7 +472,7 @@ static bool CompareAndAppendOutput(
     if (!all_output->empty()) {
       actual << "==\n";
     }
-    actual << output_string;
+    actual << (found_diffs ? output_string : expected_string);
     actual.close();
   }
   // Firebolt End
@@ -484,7 +484,7 @@ static bool CompareAndAppendOutput(
                     internal::BuildTestFileEntry(
                         {test_string, "[SAME AS PREVIOUS]\n"}, *comments));
   } else {
-    absl::StrAppend(all_output, output_string);
+    absl::StrAppend(all_output, found_diffs ? output_string : expected_string);
   }
 
   return found_diffs;

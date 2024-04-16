@@ -305,11 +305,17 @@ static bool CompareAndAppendOutput(
     const std::vector<std::string> expected_parts = {},
     const std::vector<std::string> output_parts = {},
     bool compare_unsorted_result = false,
-    bool output_has_header = false) {
+    bool output_has_header = false,
+    const std::string* user_provided_expected_result = nullptr) {
   // Firebolt Start
   // If compare_unsorted_result is true, sort the lines of the actual and
   // expected result and call CompareAndAppendOutput again with the modified
   // arguments.
+  
+  if (!user_provided_expected_result) {
+    user_provided_expected_result = &expected_string;
+  }
+
   if (compare_unsorted_result && expected_parts.size() == output_parts.size()) {
     FILE_BASED_TEST_DRIVER_LOG(INFO)
         << "The lines of the actual and expected result are sorted "
@@ -340,7 +346,7 @@ static bool CompareAndAppendOutput(
         sorted_expected_parts.at(0), matches_requested_same_as_previous,
         filename, start_line_number, comments, all_output,
         expected_output_is_regex, sorted_expected_parts, sorted_output_parts,
-        /* sort_result_lines */ false, /* output_has_header */ false);
+        /* sort_result_lines */ false, /* output_has_header */ false, user_provided_expected_result);
   }
   // Firebolt End
 
@@ -472,7 +478,7 @@ static bool CompareAndAppendOutput(
     if (!all_output->empty()) {
       actual << "==\n";
     }
-    actual << (found_diffs ? output_string : expected_string);
+    actual << (found_diffs ? output_string : *user_provided_expected_result);
     actual.close();
   }
   // Firebolt End
@@ -484,7 +490,7 @@ static bool CompareAndAppendOutput(
                     internal::BuildTestFileEntry(
                         {test_string, "[SAME AS PREVIOUS]\n"}, *comments));
   } else {
-    absl::StrAppend(all_output, found_diffs ? output_string : expected_string);
+    absl::StrAppend(all_output, found_diffs ? output_string : *user_provided_expected_result);
   }
 
   return found_diffs;

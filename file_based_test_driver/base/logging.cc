@@ -216,8 +216,9 @@ LogMessage::LogMessage(const char *file, int line, absl::LogSeverity severity)
 
   constexpr int kTimeMessageSize = 22;
   char buffer[kTimeMessageSize];
+  tm ts{};
   strftime(buffer, kTimeMessageSize, "%Y-%m-%d %H:%M:%S  ",
-           localtime(&time_stamp.tv_sec));
+           localtime_r(&time_stamp.tv_sec, &ts));
   stream() << buffer;
   stream() << LogSeverityNames[static_cast<int>(severity)] << "  "
            << filename << " : " << line << " : ";

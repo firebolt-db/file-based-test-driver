@@ -1042,8 +1042,13 @@ bool RunOneTestCase<RunTestCaseResult, RunTestCaseOutput>(
   return internal::CompareAndAppendOutput(
              expected_string, output_string, (*parts)[0],
              matches_requested_same_as_previous, filename, start_line_number,
-             comments, all_output->GetAllOutput(), expected_output_is_regex,
-             *parts, output, compare_unsorted_result, output_has_header) ||
+             comments, all_output->GetAllOutput(),
+             /*expected_output_is_regex=*/!ignore_test_output &&
+                 expected_output_is_regex,
+             *parts, output,
+             /*compare_unsorted_result=*/!ignore_test_output &&
+                 compare_unsorted_result,
+             output_has_header) ||
          added_blank_lines;
 }
 

@@ -383,7 +383,7 @@ static bool CompareAndAppendOutput(
   // If expected_output_is_regex is true, we check every part of the
   // output separately. Therefore, the number of parts must match.
   if (expected_output_is_regex) {
-    const bool covers_multiple_alternatives = expected_parts.size()==2 && expected_parts.size() != output_parts.size();
+    const bool covers_multiple_alternatives = expected_parts.size() == 2 && expected_parts.size() != output_parts.size();
     FILE_BASED_TEST_DRIVER_LOG(INFO)
         << "The expected output is treated as a regex that must match the "
            "entire generated output.";
@@ -392,12 +392,13 @@ static bool CompareAndAppendOutput(
     // file_based_test_driver_ignore_regex because this can be used for the same
     // thing and more. Start at index 1 to ignore the query text. Otherwise,
     // regex meta chars etc. would have to be escaped in the query text.
-    for (size_t i = 1; i < expected_parts.size(); ++i) {
+    for (size_t i = 1; i < output_parts.size(); ++i) {
       if (covers_multiple_alternatives && 2 < output_parts.size() && i % 2 == 1) {
         // Skip the descriptions of the alternation groups.
         continue;
       }
-      if (!re2_st::RE2::FullMatch(output_parts[i], covers_multiple_alternatives ? expected_parts[1] : expected_parts[i])) {
+      const auto& curr_expected_part = covers_multiple_alternatives ? expected_parts[1] : expected_parts[i];
+      if (!re2_st::RE2::FullMatch(output_parts[i], curr_expected_part)) {
         if (!found_diffs) {
           // Only print it once.
           ADD_FAILURE()
@@ -409,7 +410,7 @@ static bool CompareAndAppendOutput(
 
         ADD_FAILURE()
             << "=============== EXPECTED REGEX PART ====================\n"
-            << expected_parts[i]
+            << curr_expected_part[i]
             << "================== ACTUAL PART =========================\n"
             << output_parts[i];
       }

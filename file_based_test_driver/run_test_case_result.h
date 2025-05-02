@@ -86,6 +86,17 @@ class RunTestCaseResultBase {
   void set_output_has_header(bool output_has_header) {
     output_has_header_ = output_has_header;
   }
+
+  bool rerun_test_if_failed() const { return rerun_test_if_failed_; }
+  void rerun_test_if_failed(bool value) { rerun_test_if_failed_ = value; }
+
+  void set_first_execution_time(std::chrono::steady_clock::time_point time) {
+    first_execution_ = time;
+  }
+  std::chrono::steady_clock::time_point get_first_execution_time() const {
+    FILE_BASED_TEST_DRIVER_CHECK(first_execution_.has_value());
+    return first_execution_.value();
+  }
   // Firebolt End
 
  private:
@@ -93,6 +104,15 @@ class RunTestCaseResultBase {
   // In this case, the test driver will pretend that the test returned exactly
   // the expected output.
   bool ignore_test_output_ = false;
+
+  // If set to true, indicates that the test should be rerun if it fails (the
+  // output does not match the expectation)
+  bool rerun_test_if_failed_ = false;
+
+  // The time when the test was first executed. This is used to determine if
+  // the test can be rerun if it fails (rerun_test_if_failed_) and has not yet
+  // reached the time out
+  std::optional<std::chrono::steady_clock::time_point> first_execution_;
 
   std::string filename_;
   int line_ = 0;

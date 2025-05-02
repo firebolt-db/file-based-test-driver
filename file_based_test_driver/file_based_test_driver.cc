@@ -554,6 +554,8 @@ absl::Status RunAlternations(
     sub_test_result.set_line(result->line());
     sub_test_result.set_parts(result->parts());
     sub_test_result.set_test_alternation(test_alternation);
+    sub_test_result.set_first_execution_time(
+        result->get_first_execution_time());
     run_test_case(test_case, &sub_test_result);
     if (!sub_test_result.ignore_test_output()) {
       result->set_ignore_test_output(false);
@@ -565,8 +567,8 @@ absl::Status RunAlternations(
         sub_test_result.expected_output_is_regex());
     result->set_compare_unsorted_result(
         sub_test_result.compare_unsorted_result());
-    result->set_output_has_header(
-        sub_test_result.output_has_header());
+    result->set_output_has_header(sub_test_result.output_has_header());
+    result->rerun_test_if_failed(sub_test_result.rerun_test_if_failed());
     // Firebolt End
   }
 
@@ -927,6 +929,9 @@ bool RunOneTestCase<RunTestCaseResult, RunTestCaseOutput>(
     std::vector<internal::TestCasePartComments>* comments,
     RunTestCallback<RunTestCaseResult> run_test_case,
     RunTestCaseOutput* all_output) {
+  const auto first_execution_time = std::chrono::steady_clock::now();
+
+run_test_case:
   FILE_BASED_TEST_DRIVER_CHECK(parts != nullptr);
   FILE_BASED_TEST_DRIVER_CHECK(comments != nullptr);
   FILE_BASED_TEST_DRIVER_CHECK(all_output != nullptr);
@@ -939,7 +944,8 @@ bool RunOneTestCase<RunTestCaseResult, RunTestCaseOutput>(
   // Firebolt Start
   bool expected_output_is_regex{false};
   bool compare_unsorted_result{false};
-  bool output_has_header{false};;
+  bool output_has_header{false};
+  bool rerun_test_if_failed{false};
   // Firebolt End
   bool matches_requested_same_as_previous = false;
   std::vector<std::string> output;
@@ -977,6 +983,7 @@ bool RunOneTestCase<RunTestCaseResult, RunTestCaseOutput>(
     test_result.set_filename(std::string(filename));
     test_result.set_line(start_line_number + 1);
     test_result.set_parts(*parts);
+    test_result.set_first_execution_time(first_execution_time);
     FILE_BASED_TEST_DRIVER_CHECK_OK(internal::RunAlternations(&test_result, run_test_case));
     output = test_result.test_outputs();
     ignore_test_output = test_result.ignore_test_output();
@@ -984,6 +991,7 @@ bool RunOneTestCase<RunTestCaseResult, RunTestCaseOutput>(
     expected_output_is_regex = test_result.expected_output_is_regex();
     compare_unsorted_result = test_result.compare_unsorted_result();
     output_has_header = test_result.output_has_header();
+    rerun_test_if_failed = test_result.rerun_test_if_failed();
     // Firebolt End
   }
 
@@ -1043,6 +1051,17 @@ bool RunOneTestCase<RunTestCaseResult, RunTestCaseOutput>(
       internal::BuildTestFileEntry(output, *comments);
   const std::string expected_string =
       internal::BuildTestFileEntry(*parts, *comments);
+
+  if (rerun_test_if_failed) {
+    FILE_BASED_TEST_DRIVER_CHECK(!compare_unsorted_result);
+    FILE_BASED_TEST_DRIVER_CHECK(!expected_output_is_regex);
+    FILE_BASED_TEST_DRIVER_CHECK(!ignore_test_output);
+
+    if (output_string != expected_string) {
+      // Rerun the test if the output is not as expected.
+      goto run_test_case;
+    }
+  }
 
   return internal::CompareAndAppendOutput(
              expected_string, output_string, (*parts)[0],

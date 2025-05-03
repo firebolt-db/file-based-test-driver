@@ -1141,6 +1141,7 @@ bool RunOneTestCase<RunTestCaseWithModesResult, RunTestCaseWithModesOutput>(
     test_result.set_filename(std::string(filename));
     test_result.set_line(start_line_number + 1);
     test_result.set_parts(*parts);
+    test_result.set_first_execution_time(std::chrono::steady_clock::now());
     FILE_BASED_TEST_DRIVER_CHECK_OK(internal::RunAlternations(&test_result, run_test_case));
     if (test_result.ignore_test_output()) {
       ignore_test_output = true;

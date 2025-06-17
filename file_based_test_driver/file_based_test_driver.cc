@@ -404,8 +404,8 @@ static bool CompareAndAppendOutput(
           ADD_FAILURE()
               << "\n\n******************* BEGIN TEST DIFF ********************"
               << "\nFailure in " << filename << ", line "
-              << start_line_number + 1<< "\n"
-          << "=================== EXPECTED REGEX =======================\n"
+              << start_line_number + 1 << "\n"
+              << "=================== EXPECTED REGEX =======================\n"
               << curr_expected_part
               << "=================== ACTUAL TEXT =========================\n"
               << output_parts[i] << ":\n\n";

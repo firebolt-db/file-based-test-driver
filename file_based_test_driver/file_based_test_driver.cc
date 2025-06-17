@@ -311,7 +311,7 @@ static bool CompareAndAppendOutput(
   // If compare_unsorted_result is true, sort the lines of the actual and
   // expected result and call CompareAndAppendOutput again with the modified
   // arguments.
-  
+
   if (!user_provided_expected_result) {
     user_provided_expected_result = &expected_string;
   }
@@ -404,7 +404,11 @@ static bool CompareAndAppendOutput(
           ADD_FAILURE()
               << "\n\n******************* BEGIN TEST DIFF ********************"
               << "\nFailure in " << filename << ", line "
-              << start_line_number + 1 << ":\n\n";
+              << start_line_number + 1 << "\n"
+              << "=================== EXPECTED REGEX =======================\n"
+              << curr_expected_part
+              << "=================== ACTUAL TEXT =========================\n"
+              << output_parts[i] << ":\n\n";
         }
         found_diffs = true;
 

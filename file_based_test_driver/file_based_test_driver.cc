@@ -37,9 +37,32 @@
 #include "file_based_test_driver/alternations.h"
 #include "file_based_test_driver/base/file_util.h"
 #include "file_based_test_driver/base/unified_diff.h"
+#include "file_based_test_driver/base/unified_diff_oss.h"
 #include "re2_st/re2.h"
+#include <cstdlib>
+#include <cstring>
+#include <unistd.h>
 #include "file_based_test_driver/base/ret_check.h"
 #include "file_based_test_driver/base/status.h"
+
+namespace {
+
+// Color unified diff output when stderr is a TTY (and NO_COLOR is unset).
+// Set CLICOLOR_FORCE=1 to force colors when redirecting to a file/pipe that
+// supports ANSI (e.g. `less -R`).
+bool SqlTestDiffShouldUseAnsiColors() {
+  const char* const no_color = std::getenv("NO_COLOR");
+  if (no_color != nullptr && no_color[0] != '\0') {
+    return false;
+  }
+  const char* const force = std::getenv("CLICOLOR_FORCE");
+  if (force != nullptr && force[0] != '\0' && std::strcmp(force, "0") != 0) {
+    return true;
+  }
+  return isatty(STDERR_FILENO) != 0;
+}
+
+}  // namespace
 
 ABSL_FLAG(int32_t, file_based_test_driver_insert_leading_blank_lines, 0,
           "If this is set to N > 0, then file_based_test_driver will "
@@ -433,10 +456,16 @@ static bool CompareAndAppendOutput(
     std::vector<std::string> parts =
         absl::StrSplit(filename, absl::StrCat("/", GetWorkspace(), "/"));
     std::string relpath = parts[parts.size() - 1];
+    file_based_test_driver::UnifiedDiffOptions diff_options =
+        file_based_test_driver::UnifiedDiffOptions().set_context_size(5);
+    if (SqlTestDiffShouldUseAnsiColors()) {
+      diff_options.set_colorizer(
+          file_based_test_driver_base::UnifiedDiffColorizer::AnsiColorizer());
+    }
     std::string diff = file_based_test_driver::UnifiedDiff(
         expected_string_for_diff, output_string_for_diff,
         absl::StrCat("expected/", relpath), absl::StrCat("actual/", relpath),
-        file_based_test_driver::UnifiedDiffOptions().set_context_size(5));
+        diff_options);
     found_diffs = true;
     if (absl::GetFlag(FLAGS_file_based_test_driver_individual_tests)) {
       // EXPECT_EQ does its own diff, but escapes carriage returns.

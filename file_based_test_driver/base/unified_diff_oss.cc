@@ -87,13 +87,15 @@ void Print(
     }
   }
 
-  // Prepend the colorization prefix.
-  if (prefix != nullptr) {
-    absl::StrAppend(out, *prefix);
-  }
-
-  // Print the actual lines.
+  // Print the actual lines. When colorizing adds/deletes, wrap each line in
+  // prefix/suffix so line-oriented output (loggers, test runners) still shows
+  // color on every line; a single open SGR before the block would reset
+  // between lines for those consumers.
   for (int i = from; i < to; ++i) {
+    if (prefix != nullptr) {
+      absl::StrAppend(out, *prefix);
+    }
+
     absl::StrAppend(out, LineTypeToPrefix(line_type));
 
     auto line = absl::string_view(lines[i].data, lines[i].length);
@@ -112,11 +114,10 @@ void Print(
         }
       }
     }
-  }
 
-  // Append the colorization suffix.
-  if (suffix != nullptr) {
-    absl::StrAppend(out, *suffix);
+    if (suffix != nullptr) {
+      absl::StrAppend(out, *suffix);
+    }
   }
 }
 

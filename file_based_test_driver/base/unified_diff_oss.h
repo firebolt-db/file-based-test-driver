@@ -28,8 +28,8 @@ namespace file_based_test_driver_base {
 
 class UnifiedDiffColorizer {
  public:
-  // The prefix and suffix strings are applied when highlighting an added or
-  // deleted blocks of text.
+  // The prefix and suffix strings wrap each added or deleted diff line so
+  // line-oriented output (loggers, IDEs) still shows color on every line.
   UnifiedDiffColorizer(absl::string_view add_prefix,
                        absl::string_view add_suffix,
                        absl::string_view del_prefix,

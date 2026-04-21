@@ -134,9 +134,9 @@ void VerifyGetNextTestdata(
 }
 
 TEST(TestdataUtilTest, SortLines) {
-  EXPECT_EQ("a\nb\nc", SortLines("b\na\nc"));
-  EXPECT_EQ("1\n2\n3\n", SortLines("2\n3\n1\n"));
-  EXPECT_EQ("aba\nabb\nabc\n", SortLines("abb\naba\nabc\n"));
+  EXPECT_EQ("a\nb\nc", SortLines("b\na\nc", false));
+  EXPECT_EQ("1\n2\n3\n", SortLines("2\n3\n1\n", false));
+  EXPECT_EQ("aba\nabb\nabc\n", SortLines("abb\naba\nabc\n", false));
 }
 
 TEST(TestdataUtilTest, Basic) {

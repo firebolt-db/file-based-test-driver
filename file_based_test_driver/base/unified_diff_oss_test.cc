@@ -268,10 +268,28 @@ TEST(UnifiedDiffTest, AnsiColorizer) {
       "@@ -1,3 +1,5 @@\n"
       " d\n"
       "\033[31m-c\n\033[0m"
-      "\033[32m+a\n"
-      "+b\n"
-      "+b2\n\033[0m"
+      "\033[32m+a\n\033[0m"
+      "\033[32m+b\n\033[0m"
+      "\033[32m+b2\n\033[0m"
       " d\n",
+      UnifiedDiff(ls, rs, "foo", "bar", options));
+}
+
+TEST(UnifiedDiffTest, AnsiColorizerConsecutiveRemovedLines) {
+  std::string ls("a\nb\nc\n");
+  std::string rs("c\n");
+
+  UnifiedDiffOptions options;
+  options.set_context_size(3);
+  options.set_colorizer(UnifiedDiffColorizer::AnsiColorizer());
+
+  ASSERT_EQ(
+      "--- foo\n"
+      "+++ bar\n"
+      "@@ -1,3 +1 @@\n"
+      "\033[31m-a\n\033[0m"
+      "\033[31m-b\n\033[0m"
+      " c\n",
       UnifiedDiff(ls, rs, "foo", "bar", options));
 }
 
@@ -292,9 +310,9 @@ TEST(UnifiedDiffTest, CustomColorizer) {
       "@@ -1,3 +1,5 @@\n"
       " d\n"
       "BEGIN_DEL-c\nEND_DEL"
-      "BEGIN_ADD+a\n"
-      "+b\n"
-      "+b2\nEND_ADD"
+      "BEGIN_ADD+a\nEND_ADD"
+      "BEGIN_ADD+b\nEND_ADD"
+      "BEGIN_ADD+b2\nEND_ADD"
       " d\n",
       UnifiedDiff(ls, rs, "foo", "bar", options));
 }

@@ -396,17 +396,20 @@ static bool CompareAndAppendOutput(
   // Firebolt's executor emits a single `ERROR: <message>` line. We want
   // both shapes to count as identical "this errored".
   if (ignore_error_message) {
-    // The pattern matches one ERROR: line plus any continuation lines.
-    // Two shapes are normalized:
-    //   * PG psql:  ERROR: …  / LINE N: …  /    ^  / DETAIL: … / HINT: … / …
-    //   * Firebolt: ERROR: …  / <echoed-sql-line>  /    ^
-    // The continuation alternation accepts the named PG prefixes plus
-    // a caret line, OR a non-separator free-form line — to catch the
+    // The pattern matches one ERROR header line plus any continuation lines.
+    // Three shapes are normalized:
+    //   * PG psql:  ERROR: …          / LINE N: …  /    ^  / DETAIL: … / HINT: … / …
+    //   * Firebolt: ERROR: …          / <echoed-sql-line>  /    ^
+    //   * MySQL:    ERROR <sqlstate>: …      (e.g. `ERROR HY000:` / `ERROR 1234:`)
+    // The header allows any non-newline characters between `ERROR` and the
+    // first `:` so all three engines' error prefixes normalize to a bare
+    // `ERROR` token. Continuation alternation accepts the named PG prefixes
+    // plus a caret line, OR a non-separator free-form line — to catch the
     // echoed SQL between ERROR: and the caret in Firebolt's shape.
     // Anchored to (?m)^ so we don't eat past blank lines or `--`/`==`
     // section markers.
     static const re2_st::RE2 kErrorBlock{
-        R"((?m)^ERROR:[^\n]*(?:\n(?:LINE [0-9]+:|HINT:|DETAIL:|CONTEXT:|QUERY:|STATEMENT:|[ \t]*\^[^\n]*|[^\n=\-][^\n]*))*)"};
+        R"((?m)^ERROR[^\n:]*:[^\n]*(?:\n(?:LINE [0-9]+:|HINT:|DETAIL:|CONTEXT:|QUERY:|STATEMENT:|[ \t]*\^[^\n]*|[^\n=\-][^\n]*))*)"};
     re2_st::RE2::GlobalReplace(&output_string_for_diff, kErrorBlock, "ERROR");
     re2_st::RE2::GlobalReplace(&expected_string_for_diff, kErrorBlock, "ERROR");
   }

@@ -619,6 +619,23 @@ absl::Status RunAlternations(
     sub_test_result.set_first_execution_time(
         result->get_first_execution_time());
     run_test_case(test_case, &sub_test_result);
+    // Firebolt: [ignore_test_output] suppresses output comparison, but a
+    // Firebolt-side ERROR when the expected output is not an error is a real
+    // regression we don't want masked. Promote the sub-result back to "not
+    // ignored" in that case so the normal diff path runs.
+    if constexpr (std::is_same_v<RunTestCaseResultType, RunTestCaseResult>) {
+      if (sub_test_result.ignore_test_output() &&
+          sub_test_result.test_outputs().size() >= 1) {
+        const auto& parent_parts = result->parts();
+        const bool actual_is_error =
+            absl::StartsWith(sub_test_result.test_outputs().front(), "ERROR");
+        const bool expected_is_error =
+            parent_parts.size() >= 2 && absl::StartsWith(parent_parts[1], "ERROR");
+        if (actual_is_error && !expected_is_error) {
+          sub_test_result.set_ignore_test_output(false);
+        }
+      }
+    }
     if (!sub_test_result.ignore_test_output()) {
       result->set_ignore_test_output(false);
       FILE_BASED_TEST_DRIVER_RETURN_IF_ERROR(

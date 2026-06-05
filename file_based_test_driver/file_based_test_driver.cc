@@ -1087,11 +1087,16 @@ run_test_case:
 
   if (rerun_test_if_failed) {
     FILE_BASED_TEST_DRIVER_CHECK(!compare_unsorted_result);
-    FILE_BASED_TEST_DRIVER_CHECK(!expected_output_is_regex);
     FILE_BASED_TEST_DRIVER_CHECK(!ignore_test_output);
 
-    if (output_string != expected_string) {
-      // Rerun the test if the output is not as expected.
+    // Alternation groups are not supported with output_is_regex + rerun.
+    FILE_BASED_TEST_DRIVER_CHECK(!expected_output_is_regex || parts->size() == 2);
+
+    const bool test_passed =
+        expected_output_is_regex
+            ? (output.size() == 2 && re2_st::RE2::FullMatch(output[1], (*parts)[1]))
+            : output_string == expected_string;
+    if (!test_passed) {
       goto run_test_case;
     }
   }

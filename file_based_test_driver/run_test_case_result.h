@@ -87,6 +87,13 @@ class RunTestCaseResultBase {
     output_has_header_ = output_has_header;
   }
 
+  // When true, any line starting with `ERROR:` on either the expected or
+  // actual side is normalized to a bare `ERROR` before diffing. Used by
+  // tests that want to assert "this statement should error" without
+  // pinning the exact error-message text.
+  bool ignore_error_message() const { return ignore_error_message_; }
+  void set_ignore_error_message(bool v) { ignore_error_message_ = v; }
+
   bool rerun_test_if_failed() const { return rerun_test_if_failed_; }
   void rerun_test_if_failed(bool value) { rerun_test_if_failed_ = value; }
 
@@ -130,6 +137,10 @@ class RunTestCaseResultBase {
   // If compare_unsorted_result_ is true, decide whether first line of the
   // result is a header, and hence doesn't need to be sorted
   bool output_has_header_{false};
+  // If ignore_error_message_ is true, the diff normalizes `ERROR: …` lines
+  // on both expected and actual to bare `ERROR` before comparing — so the
+  // exact error-message text isn't a diff.
+  bool ignore_error_message_{false};
   // Firebolt End
 };
 

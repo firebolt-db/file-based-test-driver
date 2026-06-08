@@ -329,6 +329,7 @@ static bool CompareAndAppendOutput(
     const std::vector<std::string> output_parts = {},
     bool compare_unsorted_result = false,
     bool output_has_header = false,
+    bool ignore_error_message = false,
     const std::string* user_provided_expected_result = nullptr) {
   // Firebolt Start
   // If compare_unsorted_result is true, sort the lines of the actual and
@@ -369,7 +370,8 @@ static bool CompareAndAppendOutput(
         sorted_expected_parts.at(0), matches_requested_same_as_previous,
         filename, start_line_number, comments, all_output,
         expected_output_is_regex, sorted_expected_parts, sorted_output_parts,
-        /* sort_result_lines */ false, /* output_has_header */ false, user_provided_expected_result);
+        /* sort_result_lines */ false, /* output_has_header */ false,
+        ignore_error_message, user_provided_expected_result);
   }
   // Firebolt End
 
@@ -382,6 +384,36 @@ static bool CompareAndAppendOutput(
   // This feature is disabled by default.
   std::string output_string_for_diff = output_string;
   std::string expected_string_for_diff = expected_string;
+  // Firebolt Start
+  // [ignore_error_message] — when a statement is expected to error,
+  // collapse the multi-line PG-style error block (and any equivalent
+  // single-line engine error) to a bare `ERROR` token on both sides.
+  // PG psql emits up to four lines for a single error:
+  //     ERROR:  <message>
+  //     LINE N: <offending SQL>
+  //                                   ^
+  //     DETAIL: <…>     HINT: <…>     CONTEXT: <…>     QUERY: <…>
+  // Firebolt's executor emits a single `ERROR: <message>` line. We want
+  // both shapes to count as identical "this errored".
+  if (ignore_error_message) {
+    // The pattern matches one ERROR header line plus any continuation lines.
+    // Three shapes are normalized:
+    //   * PG psql:  ERROR: …          / LINE N: …  /    ^  / DETAIL: … / HINT: … / …
+    //   * Firebolt: ERROR: …          / <echoed-sql-line>  /    ^
+    //   * MySQL:    ERROR <sqlstate>: …      (e.g. `ERROR HY000:` / `ERROR 1234:`)
+    // The header allows any non-newline characters between `ERROR` and the
+    // first `:` so all three engines' error prefixes normalize to a bare
+    // `ERROR` token. Continuation alternation accepts the named PG prefixes
+    // plus a caret line, OR a non-separator free-form line — to catch the
+    // echoed SQL between ERROR: and the caret in Firebolt's shape.
+    // Anchored to (?m)^ so we don't eat past blank lines or `--`/`==`
+    // section markers.
+    static const re2_st::RE2 kErrorBlock{
+        R"((?m)^ERROR[^\n:]*:[^\n]*(?:\n(?:LINE [0-9]+:|HINT:|DETAIL:|CONTEXT:|QUERY:|STATEMENT:|[ \t]*\^[^\n]*|[^\n=\-][^\n]*))*)"};
+    re2_st::RE2::GlobalReplace(&output_string_for_diff, kErrorBlock, "ERROR");
+    re2_st::RE2::GlobalReplace(&expected_string_for_diff, kErrorBlock, "ERROR");
+  }
+  // Firebolt End
   if (!absl::GetFlag(FLAGS_file_based_test_driver_ignore_regex).empty()) {
     re2_st::RE2::GlobalReplace(&output_string_for_diff,
                        absl::GetFlag(FLAGS_file_based_test_driver_ignore_regex),
@@ -590,6 +622,23 @@ absl::Status RunAlternations(
     sub_test_result.set_first_execution_time(
         result->get_first_execution_time());
     run_test_case(test_case, &sub_test_result);
+    // Firebolt: [ignore_test_output] suppresses output comparison, but a
+    // Firebolt-side ERROR when the expected output is not an error is a real
+    // regression we don't want masked. Promote the sub-result back to "not
+    // ignored" in that case so the normal diff path runs.
+    if constexpr (std::is_same_v<RunTestCaseResultType, RunTestCaseResult>) {
+      if (sub_test_result.ignore_test_output() &&
+          sub_test_result.test_outputs().size() >= 1) {
+        const auto& parent_parts = result->parts();
+        const bool actual_is_error =
+            absl::StartsWith(sub_test_result.test_outputs().front(), "ERROR");
+        const bool expected_is_error =
+            parent_parts.size() >= 2 && absl::StartsWith(parent_parts[1], "ERROR");
+        if (actual_is_error && !expected_is_error) {
+          sub_test_result.set_ignore_test_output(false);
+        }
+      }
+    }
     if (!sub_test_result.ignore_test_output()) {
       result->set_ignore_test_output(false);
       FILE_BASED_TEST_DRIVER_RETURN_IF_ERROR(
@@ -600,6 +649,8 @@ absl::Status RunAlternations(
         sub_test_result.expected_output_is_regex());
     result->set_compare_unsorted_result(
         sub_test_result.compare_unsorted_result());
+    result->set_ignore_error_message(
+        sub_test_result.ignore_error_message());
     result->set_output_has_header(sub_test_result.output_has_header());
     result->rerun_test_if_failed(sub_test_result.rerun_test_if_failed());
     // Firebolt End
@@ -979,6 +1030,7 @@ run_test_case:
   bool compare_unsorted_result{false};
   bool output_has_header{false};
   bool rerun_test_if_failed{false};
+  bool ignore_error_message{false};
   // Firebolt End
   bool matches_requested_same_as_previous = false;
   std::vector<std::string> output;
@@ -1025,6 +1077,7 @@ run_test_case:
     compare_unsorted_result = test_result.compare_unsorted_result();
     output_has_header = test_result.output_has_header();
     rerun_test_if_failed = test_result.rerun_test_if_failed();
+    ignore_error_message = test_result.ignore_error_message();
     // Firebolt End
   }
 
@@ -1110,7 +1163,8 @@ run_test_case:
              *parts, output,
              /*compare_unsorted_result=*/!ignore_test_output &&
                  compare_unsorted_result,
-             output_has_header) ||
+             output_has_header,
+             /*ignore_error_message=*/!ignore_test_output && ignore_error_message) ||
          added_blank_lines;
 }
 

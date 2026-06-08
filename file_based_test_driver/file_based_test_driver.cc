@@ -396,20 +396,10 @@ static bool CompareAndAppendOutput(
   // Firebolt's executor emits a single `ERROR: <message>` line. We want
   // both shapes to count as identical "this errored".
   if (ignore_error_message) {
-    // The pattern matches one ERROR header line plus any continuation lines.
-    // Three shapes are normalized:
-    //   * PG psql:  ERROR: …          / LINE N: …  /    ^  / DETAIL: … / HINT: … / …
-    //   * Firebolt: ERROR: …          / <echoed-sql-line>  /    ^
-    //   * MySQL:    ERROR <sqlstate>: …      (e.g. `ERROR HY000:` / `ERROR 1234:`)
-    // The header allows any non-newline characters between `ERROR` and the
-    // first `:` so all three engines' error prefixes normalize to a bare
-    // `ERROR` token. Continuation alternation accepts the named PG prefixes
-    // plus a caret line, OR a non-separator free-form line — to catch the
-    // echoed SQL between ERROR: and the caret in Firebolt's shape.
-    // Anchored to (?m)^ so we don't eat past blank lines or `--`/`==`
-    // section markers.
+    // The pattern matches one ERROR: line and any number of
+    // immediately-following LINE/HINT/DETAIL/CONTEXT/QUERY/^ lines.
     static const re2_st::RE2 kErrorBlock{
-        R"((?m)^ERROR[^\n:]*:[^\n]*(?:\n(?:LINE [0-9]+:|HINT:|DETAIL:|CONTEXT:|QUERY:|STATEMENT:|[ \t]*\^[^\n]*|[^\n=\-][^\n]*))*)"};
+        R"((?m)^ERROR:[^\n]*(?:\n(?:LINE [0-9]+:|HINT:|DETAIL:|CONTEXT:|QUERY:|STATEMENT:|[ \t]*\^)[^\n]*)*)"};
     re2_st::RE2::GlobalReplace(&output_string_for_diff, kErrorBlock, "ERROR");
     re2_st::RE2::GlobalReplace(&expected_string_for_diff, kErrorBlock, "ERROR");
   }
@@ -622,23 +612,6 @@ absl::Status RunAlternations(
     sub_test_result.set_first_execution_time(
         result->get_first_execution_time());
     run_test_case(test_case, &sub_test_result);
-    // Firebolt: [ignore_test_output] suppresses output comparison, but a
-    // Firebolt-side ERROR when the expected output is not an error is a real
-    // regression we don't want masked. Promote the sub-result back to "not
-    // ignored" in that case so the normal diff path runs.
-    if constexpr (std::is_same_v<RunTestCaseResultType, RunTestCaseResult>) {
-      if (sub_test_result.ignore_test_output() &&
-          sub_test_result.test_outputs().size() >= 1) {
-        const auto& parent_parts = result->parts();
-        const bool actual_is_error =
-            absl::StartsWith(sub_test_result.test_outputs().front(), "ERROR");
-        const bool expected_is_error =
-            parent_parts.size() >= 2 && absl::StartsWith(parent_parts[1], "ERROR");
-        if (actual_is_error && !expected_is_error) {
-          sub_test_result.set_ignore_test_output(false);
-        }
-      }
-    }
     if (!sub_test_result.ignore_test_output()) {
       result->set_ignore_test_output(false);
       FILE_BASED_TEST_DRIVER_RETURN_IF_ERROR(

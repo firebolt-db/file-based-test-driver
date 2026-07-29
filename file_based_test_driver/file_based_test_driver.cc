@@ -316,6 +316,26 @@ std::string BuildTestFileEntry(
   return s;
 }
 
+// Collapse a result part (index 0 is the query text) that is only "OK"
+// statements joined by "\n;\n" to a single "OK"; anything else is unchanged.
+std::vector<std::string> CollapseAllOkResultParts(std::vector<std::string> parts) {
+  for (size_t i = 1; i < parts.size(); ++i) {
+    std::string body = parts[i];
+    const bool trailing_nl = !body.empty() && body.back() == '\n';
+    if (trailing_nl) body.pop_back();
+    if (body.find("\n;\n") == std::string::npos) continue;  // single statement
+    bool all_ok = true;
+    for (absl::string_view stmt : absl::StrSplit(body, "\n;\n")) {
+      if (stmt != "OK") {
+        all_ok = false;
+        break;
+      }
+    }
+    if (all_ok) parts[i] = trailing_nl ? "OK\n" : "OK";
+  }
+  return parts;
+}
+
 // Compares the expected output ('expected_string') with the actual output
 // ('output_string') and returns true if diff is found. Also appends the
 // actual output to 'all_output'.
@@ -382,8 +402,18 @@ static bool CompareAndAppendOutput(
   // string on both the left and right of the diff function.
   // This is useful when some known differences have to be ignored.
   // This feature is disabled by default.
-  std::string output_string_for_diff = output_string;
-  std::string expected_string_for_diff = expected_string;
+  // Rebuild the diff strings from OK-collapsed parts so a many-OK and a one-OK
+  // result compare equal; only rebuild when a collapse happened, so the common
+  // path is byte-for-byte unchanged.
+  std::vector<std::string> output_parts_ok = internal::CollapseAllOkResultParts(output_parts);
+  std::vector<std::string> expected_parts_ok = internal::CollapseAllOkResultParts(expected_parts);
+  std::string output_string_for_diff =
+      output_parts_ok == output_parts ? output_string
+                                      : internal::BuildTestFileEntry(output_parts_ok, *comments);
+  std::string expected_string_for_diff =
+      expected_parts_ok == expected_parts
+          ? expected_string
+          : internal::BuildTestFileEntry(expected_parts_ok, *comments);
   // Firebolt Start
   // [ignore_error_message] — when a statement is expected to error,
   // collapse the multi-line PG-style error block (and any equivalent

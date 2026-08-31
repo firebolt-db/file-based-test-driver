@@ -20,6 +20,7 @@
 #include <map>
 #include <memory>
 #include <set>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -90,6 +91,27 @@ namespace file_based_test_driver {
 // <result type 3>         # all modes: mode = ""
 // all mode output for result type 3
 //
+// Firebolt Start
+// The parts of a `<result type>[MODE]...` section header, as ParseFrom reads it.
+struct SectionHeader {
+  // The header line itself, pointing into the part it was parsed from.
+  absl::string_view line;
+  std::string result_type;
+  // The modes this section is for. Empty when the header names none, in which case the section
+  // stands for every mode.
+  std::vector<TestCaseMode> modes;
+  // Everything after the header line.
+  absl::string_view body;
+};
+
+// Parses the section header at the start of `part`, if it has one. A part whose first line merely
+// looks header-shaped is output -- a result header whose first column is named `<`, say -- and gives
+// nullopt, exactly as ParseFrom treats it. So does a malformed header, which ParseFrom itself
+// reports. Public so that a caller reading sections back out of a test file reads them the way
+// ParseFrom wrote them, instead of with a second parser of its own.
+std::optional<SectionHeader> ParseSectionHeader(absl::string_view part);
+// Firebolt End
+
 class TestCaseOutputs {
  public:
   TestCaseOutputs() = default;

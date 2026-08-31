@@ -25,11 +25,10 @@
 
 namespace file_based_test_driver {
 
-const char AlternationSet::kEmptyAlternationName[] = "<empty>";
-// The same spelling as above: it names the group in an `ALTERNATION GROUP: ...` part, so both paths
-// write a file the same way. It read "EMPTY" while this path encoded names into a `<result type>`,
-// where angle brackets could not appear.
-const char AlternationSetWithModes::kEmptyAlternationName[] = "<empty>";
+// One spelling for both paths: the name goes into an `ALTERNATION GROUP: ...` part either way, so a
+// file looks the same whichever path wrote it. The per-mode path read "EMPTY" while it encoded names
+// into a `<result type>`, where angle brackets could not appear.
+constexpr char kEmptyAlternationName[] = "<empty>";
 
 absl::Status AlternationSet::Record(const std::string& alternation_name,
                                     const RunTestCaseResult& test_case_result) {

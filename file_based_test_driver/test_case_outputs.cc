@@ -116,6 +116,17 @@ absl::Status ParseFirstLine(const absl::string_view part,
 
 }  // namespace
 
+// Firebolt Start
+std::optional<SectionHeader> ParseSectionHeader(absl::string_view part) {
+  FirstLineParseResult parse_result;
+  if (!ParseFirstLine(part, &parse_result).ok() || !parse_result.is_header) return std::nullopt;
+  return SectionHeader{.line = parse_result.first_line,
+                       .result_type = std::move(parse_result.result_type),
+                       .modes = std::move(parse_result.test_modes),
+                       .body = parse_result.remainder};
+}
+// Firebolt End
+
 absl::Status TestCaseOutputs::RecordOutput(const TestCaseMode& test_mode,
                                            absl::string_view result_type,
                                            absl::string_view output) {

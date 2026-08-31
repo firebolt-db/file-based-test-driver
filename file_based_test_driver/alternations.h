@@ -40,7 +40,6 @@ class AlternationSet {
   absl::Status Finish(RunTestCaseResult* test_case_result);
 
  private:
-  static const char kEmptyAlternationName[];
   bool finished_ = false;
 
   // This map hold {results -> [index into alternation_name_ that produced those
@@ -83,7 +82,6 @@ class AlternationSetWithModes {
   using ResultTypeToOutputMap =
       std::map<std::string, OutputToAlternationNameMap>;
 
-  static const char kEmptyAlternationName[];
 
   // Returns in 'all_modes' the union of modes used by all of the alternations.
   // Sets PossibleModes in test_case_outputs from possible_modes in

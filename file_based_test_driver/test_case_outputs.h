@@ -149,10 +149,10 @@ class TestCaseOutputs {
                             absl::string_view output);
 
   // Firebolt Start
-  // Sorts the lines of every recorded part, as [unsorted_output] asks for. Applied before
-  // alternations are grouped, so that two alternations whose rows differ only in order count as one
-  // group -- which is what the single-expected-output path does (AlternationSet::Record).
-  void SortLinesInOutputs(bool output_has_header);
+  // Rewrites every recorded part through 'normalize'. Used to sort lines for [unsorted_output]
+  // before alternations are grouped, so that two alternations whose rows differ only in order count
+  // as one group -- as they do on the single-expected-output path (AlternationSet::Record).
+  void NormalizeOutputs(absl::FunctionRef<std::string(absl::string_view)> normalize);
 
   // Records an output that is a sequence of parts: what an alternation group set looks like, where
   // a part naming the group precedes each group's output.
@@ -221,10 +221,9 @@ class TestCaseOutputs {
       TestCaseOutputs* merged_outputs);
 
   // Firebolt Start
-  // Replaces every output of this (actual) TestCaseOutputs that <expected> already satisfies -- per
-  // <satisfies>, which carries the test case's lenient comparison modes -- with the expected text,
-  // so the textual diff downstream sees no difference where those modes say there is none. Outputs
-  // <expected> has no counterpart for are left alone. Returns how many were replaced.
+  // Replaces every output that <expected> already satisfies -- per <satisfies>, which carries the
+  // case's lenient comparison modes -- with the expected text, so the textual diff downstream sees
+  // no difference where those modes say there is none. Returns how many were replaced.
   size_t AdoptSatisfiedOutputs(
       const TestCaseOutputs& expected,
       absl::FunctionRef<bool(absl::string_view /* expected */, absl::string_view /* actual */)>
@@ -271,15 +270,25 @@ class TestCaseOutputs {
     }
 
     // Firebolt Start
-    // Appends one more part to 'result_type', which must already exist. An output is a sequence of
-    // parts, not a single one, so that alternation groups can be written the way the
-    // single-expected-output path writes them: a `ALTERNATION GROUP: ...` part naming the group,
-    // then that group's output part(s), all separated by `--` in the file.
+    // An output is a sequence of parts rather than one part, so that alternation groups can be
+    // written the way the single-expected-output path writes them: an `ALTERNATION GROUP: ...` part
+    // naming the group, then that group's output, `--`-separated in the file.
+
+    // Appends one more part to 'result_type', which must already exist.
     ABSL_MUST_USE_RESULT bool AppendPart(absl::string_view result_type,
                                          absl::string_view part) {
       auto it = result_type_to_parts_.find(result_type);
       if (it == result_type_to_parts_.end()) return false;
       it->second.emplace_back(part);
+      return true;
+    }
+
+    // Replaces the parts for 'result_type', which must already exist.
+    ABSL_MUST_USE_RESULT bool SetOutput(absl::string_view result_type,
+                                        std::vector<std::string> parts) {
+      auto it = result_type_to_parts_.find(result_type);
+      if (it == result_type_to_parts_.end()) return false;
+      it->second = std::move(parts);
       return true;
     }
     // Firebolt End

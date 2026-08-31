@@ -333,10 +333,9 @@ static void CollapseErrorBlocks(std::string* text) {
   re2_st::RE2::GlobalReplace(text, kErrorBlock, "ERROR");
 }
 
-// True when <actual> satisfies <expected> under the lenient comparison modes the test case asked
-// for. The modes path (RunTestCasesWithModesFromFiles) needs this per (test mode, result type)
-// body: its serialized sections carry a `<result type>[MODE]` header, and a header line is neither
-// sortable nor a valid regex, so those sections cannot be fed to the rules directly.
+// True when <actual> satisfies <expected> under the lenient comparison modes the case asked for.
+// Applied per (test mode, result type) body: a serialized section carries a `<result type>[MODE]`
+// header, which is neither sortable nor a valid regex.
 static bool OutputSatisfiesExpected(absl::string_view expected, absl::string_view actual,
                                     bool expected_output_is_regex,
                                     bool compare_unsorted_result, bool output_has_header,
@@ -1265,15 +1264,10 @@ bool RunOneTestCase<RunTestCaseWithModesResult, RunTestCaseWithModesOutput>(
     test_result.set_parts(*parts);
     test_result.set_first_execution_time(std::chrono::steady_clock::now());
     // Firebolt Start
-    // Runs the case, then applies the same two things the single-expected-output path applies:
-    //
-    //  * the lenient comparison modes ([output_is_regex], [unsorted_output],
-    //    [ignore_error_message]), per (test mode, result type) body -- where the rules are
-    //    satisfied, the actual output adopts the expected text, so the merge and the diff below see
-    //    no difference where the rules say there is none;
-    //  * [wait_for_success_timeout_seconds=...], which asks for another attempt until the output
-    //    matches. The callback decides per attempt whether one is still within its timeout, so the
-    //    result keeps its first-execution time across them while its outputs are rebuilt.
+    // Runs the case, then applies what the single-expected-output path applies: the lenient
+    // comparison modes -- where they are satisfied the actual output adopts the expected text, so
+    // the diff below sees no difference -- and [wait_for_success_timeout_seconds=...], whose retries
+    // rebuild the outputs while the result keeps its first-execution time.
     while (true) {
       FILE_BASED_TEST_DRIVER_CHECK_OK(internal::RunAlternations(&test_result, run_test_case));
       if (test_result.ignore_test_output()) {

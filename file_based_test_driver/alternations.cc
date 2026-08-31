@@ -126,7 +126,9 @@ absl::Status AlternationSetWithModes::Record(
   // whose rows differ only in order belong in one group, as they do on the single-expected-output
   // path (AlternationSet::Record does the same).
   if (test_case_result.compare_unsorted_result()) {
-    outputs.SortLinesInOutputs(test_case_result.output_has_header());
+    outputs.NormalizeOutputs([&test_case_result](absl::string_view part) {
+      return SortLines(part, test_case_result.output_has_header());
+    });
   }
   alternations_.emplace_back(
       alternation_name.empty() ? kEmptyAlternationName : alternation_name, outputs);

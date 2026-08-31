@@ -112,19 +112,6 @@ constexpr absl::string_view kRootDir =
 // Returns if this is a new test file to write actual results into.
 // This makes it easy to make sure multiple wrong results from a single file
 // get written out.
-bool isNewTestFile(std::string filename) {
-
-  static std::unordered_set<std::string> seen{};
-
-  if (seen.contains(filename)) {
-    return false;
-  } else {
-    seen.insert(std::move(filename));
-    return true;
-  }
-
-}
-
 // Firebolt End
 
 }  // namespace
@@ -596,9 +583,12 @@ static bool CompareAndAppendOutput(
   if (absl::GetFlag(FLAGS_fb_write_actual)) {
     // Figure out if we need to create a new _actual file or can use
     // the existing one.
-    std::string out_file = std::string(filename) + "_actual";
-    auto mode =
-        isNewTestFile(out_file) ? std::ios_base::out : std::ios_base::app;
+    // Truncate on the first case of this run over the file and append afterwards. Keyed on the
+    // output accumulated so far, which is per run over one file, rather than on whether the process
+    // has ever written this _actual: a second run over the same file -- an [include=...], or a suite
+    // that runs each file once per storage layer -- has to start a fresh file, not append to the
+    // previous run's.
+    auto mode = all_output->empty() ? std::ios_base::out : std::ios_base::app;
 
     // Write results to the file.
     actual.open(std::string(filename) + "_actual", mode);

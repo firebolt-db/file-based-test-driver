@@ -14,6 +14,9 @@
 // limitations under the License.
 //
 #include "file_based_test_driver/alternations.h"
+#include "absl/container/flat_hash_map.h"
+#include <algorithm>
+#include <limits>
 
 #include "absl/strings/str_join.h"
 #include "re2_st/re2.h"
@@ -23,7 +26,10 @@
 namespace file_based_test_driver {
 
 const char AlternationSet::kEmptyAlternationName[] = "<empty>";
-const char AlternationSetWithModes::kEmptyAlternationName[] = "EMPTY";
+// The same spelling as above: it names the group in an `ALTERNATION GROUP: ...` part, so both paths
+// write a file the same way. It read "EMPTY" while this path encoded names into a `<result type>`,
+// where angle brackets could not appear.
+const char AlternationSetWithModes::kEmptyAlternationName[] = "<empty>";
 
 absl::Status AlternationSet::Record(const std::string& alternation_name,
                                     const RunTestCaseResult& test_case_result) {
@@ -111,13 +117,19 @@ absl::Status AlternationSetWithModes::Record(
     const std::string& alternation_name,
     const RunTestCaseWithModesResult& test_case_result) {
   FILE_BASED_TEST_DRIVER_RET_CHECK(!finished_);
-  static re2_st::LazyRE2 re = {"[\\n\\{\\}\\<\\>]"};
-  FILE_BASED_TEST_DRIVER_RET_CHECK(!re2_st::RE2::PartialMatch(alternation_name, *re))
-      << "Alternation \"" << alternation_name << "\" contains names that can't "
-      << "be stored in a result_type: " << re->pattern();
+  // No restriction on what an alternation may be called: the name goes into an
+  // `ALTERNATION GROUP: ...` part, as on the single-expected-output path, rather than into a result
+  // type -- which is why characters like <, >, { and } used to be rejected here. Alternations are
+  // frequently fragments of the test's own input, so they do contain them.
+  TestCaseOutputs outputs = test_case_result.test_case_outputs();
+  // [unsorted_output] means row order does not count, so normalize before grouping: two alternations
+  // whose rows differ only in order belong in one group, as they do on the single-expected-output
+  // path (AlternationSet::Record does the same).
+  if (test_case_result.compare_unsorted_result()) {
+    outputs.SortLinesInOutputs(test_case_result.output_has_header());
+  }
   alternations_.emplace_back(
-      alternation_name.empty() ? kEmptyAlternationName : alternation_name,
-      test_case_result.test_case_outputs());
+      alternation_name.empty() ? kEmptyAlternationName : alternation_name, outputs);
   return absl::OkStatus();
 }
 
@@ -199,7 +211,7 @@ absl::Status AlternationSetWithModes::CollectAlternations(
 
     for (const auto& pair : mode_results) {
       const std::string& result_type = pair.first;
-      const std::string& output = pair.second;
+      const std::vector<std::string>& output = pair.second;
       (*result_type_to_output_map)[result_type][output].push_back(
           alternation.name);
     }
@@ -216,14 +228,14 @@ absl::Status AlternationSetWithModes::MaybeAddSingleOutput(
     return absl::OkStatus();
   }
 
-  const std::pair<std::string, std::vector<std::string>>& output_and_idx_list =
-      *output_map.begin();
+  const std::pair<const std::vector<std::string>, std::vector<std::string>>&
+      output_and_idx_list = *output_map.begin();
   if (output_and_idx_list.second.size() != alternations_.size()) {
     return absl::OkStatus();
   }
 
-  FILE_BASED_TEST_DRIVER_RETURN_IF_ERROR(test_case_outputs->RecordOutput(mode, result_type,
-                                                  output_and_idx_list.first));
+  FILE_BASED_TEST_DRIVER_RETURN_IF_ERROR(test_case_outputs->RecordOutputParts(
+      mode, result_type, output_and_idx_list.first));
   *added = true;
 
   return absl::OkStatus();
@@ -233,17 +245,42 @@ absl::Status AlternationSetWithModes::CombineAlternations(
     const TestCaseMode& mode, const std::string& result_type,
     const OutputToAlternationNameMap& output_map,
     TestCaseOutputs* test_case_outputs) {
-  for (const auto& output_and_names : output_map) {
-    const std::string& output = output_and_names.first;
-    const std::vector<std::string>& alternation_names = output_and_names.second;
-
-    const std::string annotated_result_type = absl::StrCat(
-        result_type, "{", absl::StrJoin(alternation_names, "}{"), "}");
-
-    FILE_BASED_TEST_DRIVER_RETURN_IF_ERROR(
-        test_case_outputs->RecordOutput(mode, annotated_result_type, output));
+  // Ordered by the first alternation that produced each output, so the groups appear in the order
+  // the alternations ran -- as they do on the single-expected-output path.
+  absl::flat_hash_map<std::string, size_t> index_of_name;
+  for (size_t i = 0; i < alternations_.size(); ++i) {
+    index_of_name.try_emplace(alternations_[i].name, i);
   }
-  return absl::OkStatus();
+  std::vector<const std::pair<const std::vector<std::string>, std::vector<std::string>>*> groups;
+  groups.reserve(output_map.size());
+  for (const auto& output_and_names : output_map) groups.push_back(&output_and_names);
+  const auto first_index = [&index_of_name](const std::vector<std::string>& names) {
+    size_t first = std::numeric_limits<size_t>::max();
+    for (const std::string& name : names) {
+      const auto it = index_of_name.find(name);
+      if (it != index_of_name.end()) first = std::min(first, it->second);
+    }
+    return first;
+  };
+  std::sort(groups.begin(), groups.end(), [&first_index](const auto* a, const auto* b) {
+    return first_index(a->second) < first_index(b->second);
+  });
+
+  std::vector<std::string> parts;
+  for (const auto* output_and_names : groups) {
+    const std::vector<std::string>& output = output_and_names->first;
+    const std::vector<std::string>& alternation_names = output_and_names->second;
+
+    if (alternation_names.size() > 1) {
+      parts.push_back(absl::StrCat("ALTERNATION GROUPS:\n    ",
+                                   absl::StrJoin(alternation_names, "\n    ")));
+    } else {
+      parts.push_back(absl::StrCat("ALTERNATION GROUP: ", alternation_names.front()));
+    }
+    parts.insert(parts.end(), output.begin(), output.end());
+  }
+
+  return test_case_outputs->RecordOutputParts(mode, result_type, std::move(parts));
 }
 
 }  // namespace file_based_test_driver

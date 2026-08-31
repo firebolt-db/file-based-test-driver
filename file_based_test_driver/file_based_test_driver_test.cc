@@ -648,10 +648,12 @@ line 7
 # Case using alterations.
 line {{1|3}}
 --
-<{1}>
+ALTERNATION GROUP: 1
+--
 Line 2
 --
-<{3}>
+ALTERNATION GROUP: 3
+--
 No match for line 3
 ==
 # Case where alternations have duplicate outputs.
@@ -661,39 +663,60 @@ Line 2
 ==
 sum {{1|2}} {{1|2}}
 --
-<{1,1}>
+ALTERNATION GROUP: 1,1
+--
 sum 2
 --
-<{1,2}{2,1}>
+ALTERNATION GROUPS:
+    1,2
+    2,1
+--
 sum 3
 --
-<{2,2}>
+ALTERNATION GROUP: 2,2
+--
 sum 4
 ==
 # Case with alternation and multiple outputs per alternation.
 line 1{{1|}}
 --
-<output1{1}>
+ALTERNATION GROUP: <empty>
+--
+Line 2
+--
+<output1>
+ALTERNATION GROUP: 1
+--
 Multiple
 --
-<output2{1}>
-Results
+<output2>
+ALTERNATION GROUP: 1
 --
-<{EMPTY}>
-Line 2
+Results
 ==
 # Case with multiple alternations, several of which have common results.
 # Group lists in each alternation group are in their generated order,
 # the list of groups is ordered by their first element.
 sum {{1|3}} {{2|}} {{|0}}
 --
-<{1,2,}{1,2,0}{3,,}{3,,0}>
+ALTERNATION GROUPS:
+    1,2,
+    1,2,0
+    3,,
+    3,,0
+--
 sum 3
 --
-<{1,,}{1,,0}>
+ALTERNATION GROUPS:
+    1,,
+    1,,0
+--
 sum 1
 --
-<{3,2,}{3,2,0}>
+ALTERNATION GROUPS:
+    3,2,
+    3,2,0
+--
 sum 5
 )";
 

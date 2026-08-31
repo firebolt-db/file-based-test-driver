@@ -75,9 +75,9 @@ class AlternationSetWithModes {
     TestCaseOutputs outputs;
   };
 
-  // Mapping of 'output' to a list of alternation names.
+  // Mapping of 'output' -- the sequence of parts it is written as -- to a list of alternation names.
   using OutputToAlternationNameMap =
-      std::map<std::string, std::vector<std::string>>;
+      std::map<std::vector<std::string>, std::vector<std::string>>;
 
   // Mapping of 'result_type' to the collection of outputs.
   using ResultTypeToOutputMap =
@@ -111,9 +111,19 @@ class AlternationSetWithModes {
       const OutputToAlternationNameMap& output_map,
       TestCaseOutputs* test_case_outputs, bool* added);
 
-  // Adds outputs to 'test_case_outputs' for each distinct alternation output
-  // with the 'result_type' annotated to include which alternations generated
-  // that output.
+  // Adds one output to 'test_case_outputs' holding every distinct alternation output, each preceded
+  // by a part naming the alternations that produced it -- the same shape the
+  // single-expected-output path writes:
+  //
+  //   ALTERNATION GROUP: a
+  //   --
+  //   <output for a>
+  //   --
+  //   ALTERNATION GROUPS:
+  //       b
+  //       c
+  //   --
+  //   <output for b and c>
   absl::Status CombineAlternations(const TestCaseMode& mode,
                                    const std::string& result_type,
                                    const OutputToAlternationNameMap& output_map,

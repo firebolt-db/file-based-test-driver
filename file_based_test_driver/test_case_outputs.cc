@@ -15,6 +15,8 @@
 //
 #include "file_based_test_driver/test_case_outputs.h"
 
+#include "file_based_test_driver/file_based_test_driver.h"
+
 #include <algorithm>
 #include <initializer_list>
 #include <map>
@@ -66,8 +68,8 @@ struct FirstLineParseResult {
 // '<result type>[test mode1][test mode2]...'
 // '<>[test mode1][test mode2]...'
 // '<result type>'
-// Alternations are included in the 'result type' so are not handled separately
-// parsing back.
+// An output that holds alternation groups spans several parts, of which only the first carries this
+// header; ParseFrom attaches the rest to it.
 absl::Status ParseFirstLine(const absl::string_view part,
                             FirstLineParseResult* result) {
   FILE_BASED_TEST_DRIVER_RET_CHECK(result != nullptr);
@@ -92,9 +94,12 @@ absl::Status ParseFirstLine(const absl::string_view part,
     test_modes_sp = stripped_first_line;
   } else {
     result->is_possible_modes = false;
-    // TODO: Support [\n{}<>] in alternation modes with escaping.
-    if (!re2_st::RE2::FullMatch(stripped_first_line, "^<([^>]*)>(.*)",
-                        &result->result_type, &test_modes_sp)) {
+    // A header is `<result type>` followed by zero or more `[MODE]` groups and nothing else. The
+    // trailing part has to be matched here rather than left to ParseModes: a test's own output may
+    // begin with something `<...>`-shaped -- a result header whose first column is named `<`, say --
+    // and that is output, not a malformed header.
+    if (!re2_st::RE2::FullMatch(stripped_first_line, R"(^<([^>]*)>((?:\[[^\]]*\])*)$)",
+                                &result->result_type, &test_modes_sp)) {
       return absl::OkStatus();
     }
   }
@@ -112,27 +117,56 @@ absl::Status ParseFirstLine(const absl::string_view part,
 absl::Status TestCaseOutputs::RecordOutput(const TestCaseMode& test_mode,
                                            absl::string_view result_type,
                                            absl::string_view output) {
-  FILE_BASED_TEST_DRIVER_RET_CHECK(!test_mode.empty());
-  std::string output_with_newline = std::string(output);
-  // Ensure all outputs end in '\n'.
-  if (!output.empty() && !absl::EndsWith(output, "\n")) {
-    absl::StrAppend(&output_with_newline, "\n");
-  }
-  return AddOutputInternal(test_mode, result_type, output_with_newline);
+  return RecordOutputParts(test_mode, result_type, {std::string(output)});
 }
+
+// Firebolt Start
+void TestCaseOutputs::SortLinesInOutputs(bool output_has_header) {
+  for (auto& [test_mode, mode_results] : outputs_) {
+    std::vector<std::pair<std::string, std::vector<std::string>>> sorted;
+    for (const auto& [result_type, parts] : mode_results) {
+      std::vector<std::string> sorted_parts;
+      sorted_parts.reserve(parts.size());
+      for (const std::string& part : parts) {
+        // A part that names an alternation group is a label, and there are none yet at this point.
+        sorted_parts.push_back(SortLines(part, output_has_header));
+      }
+      if (sorted_parts != parts) sorted.emplace_back(result_type, std::move(sorted_parts));
+    }
+    for (auto& [result_type, parts] : sorted) {
+      const bool removed = mode_results.RemoveResultType(result_type);
+      const bool added = mode_results.AddOutput(result_type, std::move(parts));
+      (void)removed;
+      (void)added;
+    }
+  }
+}
+
+absl::Status TestCaseOutputs::RecordOutputParts(const TestCaseMode& test_mode,
+                                                absl::string_view result_type,
+                                                std::vector<std::string> parts) {
+  FILE_BASED_TEST_DRIVER_RET_CHECK(!test_mode.empty());
+  // Ensure all parts end in '\n'.
+  for (std::string& part : parts) {
+    if (!part.empty() && !absl::EndsWith(part, "\n")) absl::StrAppend(&part, "\n");
+  }
+  return AddOutputInternal(test_mode, result_type, std::move(parts));
+}
+// Firebolt End
 
 absl::Status TestCaseOutputs::AddOutputInternal(const TestCaseMode& test_mode,
                                                 absl::string_view result_type,
-                                                absl::string_view output) {
+                                                std::vector<std::string> parts) {
+  const std::string output = absl::StrJoin(parts, "--\n");
   ModeResults& mode_results =
       file_based_test_driver_base::LookupOrInsert(&outputs_, test_mode, ModeResults());
-  std::string found_output;
-  if (mode_results.GetOutputForResultType(result_type, &found_output)) {
+  std::vector<std::string> found_parts;
+  if (mode_results.GetOutputForResultType(result_type, &found_parts)) {
     return ::file_based_test_driver_base::UnknownErrorBuilder().LogError()
            << "An output already exists for mode '" << test_mode
            << "', result type '" << result_type << "':\n"
            << "first output:\n"
-           << found_output << "\nsecond output:\n"
+           << absl::StrJoin(found_parts, "--\n") << "\nsecond output:\n"
            << output;
   }
   if (!test_mode.empty()) {
@@ -150,13 +184,13 @@ absl::Status TestCaseOutputs::AddOutputInternal(const TestCaseMode& test_mode,
     ModeResults* all_modes_outputs = file_based_test_driver_base::FindOrNull(outputs_, TestCaseMode());
     if (all_modes_outputs != nullptr) {
       if (all_modes_outputs->GetOutputForResultType(result_type,
-                                                    &found_output)) {
+                                                    &found_parts)) {
         return ::file_based_test_driver_base::UnknownErrorBuilder().LogError()
                << "Cannot add output for mode '" << test_mode
                << "' and result type '" << result_type
                << "' because an 'all modes' output exists for the "
                << "result type:\nall modes output:\n"
-               << found_output;
+               << absl::StrJoin(found_parts, "--\n");
       }
     }
   } else {
@@ -165,24 +199,26 @@ absl::Status TestCaseOutputs::AddOutputInternal(const TestCaseMode& test_mode,
       const ModeResults& mode_results = item.second;
 
       if (mode.empty()) continue;
-      if (mode_results.GetOutputForResultType(result_type, &found_output)) {
+      if (mode_results.GetOutputForResultType(result_type, &found_parts)) {
         return ::file_based_test_driver_base::UnknownErrorBuilder().LogError()
                << "Cannot add all modes output for result type '" << result_type
                << "' because a '" << mode
                << "' output already exists for the result type\n"
                << "modes specific output:\n"
-               << found_output;
+               << absl::StrJoin(found_parts, "--\n");
         }
     }
   }
-  FILE_BASED_TEST_DRIVER_RET_CHECK(mode_results.AddOutput(result_type, output));
+  FILE_BASED_TEST_DRIVER_RET_CHECK(mode_results.AddOutput(result_type, std::move(parts)));
   return absl::OkStatus();
 }
 
 absl::Status TestCaseOutputs::GetCombinedOutputs(
     bool include_possible_modes,
     std::vector<std::string>* combined_outputs) const {
-  typedef std::map<std::string, TestCaseMode::Set> OutputToModesMap;
+  // Keyed on the whole part sequence, so that modes whose outputs match collapse into one section
+  // however many parts (alternation groups) they have.
+  typedef std::map<std::vector<std::string>, TestCaseMode::Set> OutputToModesMap;
   typedef std::map<std::string, OutputToModesMap> ResultTypeOutputModesMap;
   ResultTypeOutputModesMap result_type_to_output_modes_map;
 
@@ -197,11 +233,11 @@ absl::Status TestCaseOutputs::GetCombinedOutputs(
 
     for (const auto& result_and_output : mode_results) {
       const std::string& result_type = result_and_output.first;
-      const std::string& output = result_and_output.second;
+      const std::vector<std::string>& parts = result_and_output.second;
       OutputToModesMap& output_to_modes_map = file_based_test_driver_base::LookupOrInsert(
           &result_type_to_output_modes_map, result_type, OutputToModesMap());
       TestCaseMode::Set& modes = file_based_test_driver_base::LookupOrInsert(
-          &output_to_modes_map, output, TestCaseMode::Set());
+          &output_to_modes_map, parts, TestCaseMode::Set());
       file_based_test_driver_base::InsertIfNotPresent(&modes, test_mode);
     }
   }
@@ -213,34 +249,48 @@ absl::Status TestCaseOutputs::GetCombinedOutputs(
         absl::StrJoin(possible_modes_, "][", TestCaseMode::JoinFormatter()),
         "]\n"));
   }
-  // Generates the final outputs.
+  // Generates the final outputs. An output's first part carries the `<result type>[MODE]` header;
+  // its remaining parts (a multi-group alternation output) follow as parts of their own, which is
+  // how the single-expected-output path writes them.
   for (const auto& item : result_type_to_output_modes_map) {
-    std::vector<std::string> outputs_for_result_type;
+    std::vector<std::vector<std::string>> outputs_for_result_type;
     const std::string& result_type = item.first;
     const OutputToModesMap& output_modes_map = item.second;
     for (const auto& output_modes : output_modes_map) {
-      const std::string& output = output_modes.first;
+      const std::vector<std::string>& parts = output_modes.first;
       const TestCaseMode::Set& modes = output_modes.second;
       FILE_BASED_TEST_DRIVER_RET_CHECK(!modes.empty());
-      // Construct the output string.
-      std::string output_str;
+      FILE_BASED_TEST_DRIVER_RET_CHECK(!parts.empty());
+      std::string header;
       if (!result_type.empty() || !modes.begin()->empty()) {
-        absl::StrAppend(&output_str, "<", result_type, ">");
+        absl::StrAppend(&header, "<", result_type, ">");
       }
-      absl::StrAppend(&output_str, TestCaseMode::CollapseModes(modes));
-      if (!output_str.empty()) absl::StrAppend(&output_str, "\n");
-      absl::StrAppend(&output_str, output);
-      outputs_for_result_type.push_back(output_str);
+      absl::StrAppend(&header, TestCaseMode::CollapseModes(modes));
+      if (!header.empty()) absl::StrAppend(&header, "\n");
+
+      std::vector<std::string> section = parts;
+      section.front() = absl::StrCat(header, section.front());
+      outputs_for_result_type.push_back(std::move(section));
     }
+    // Sorted for a stable file, by the section's first part -- which is where the header is, so
+    // sections stay ordered by (result type, modes) as before.
     std::sort(outputs_for_result_type.begin(), outputs_for_result_type.end());
-    for (const std::string& output_str : outputs_for_result_type) {
-      combined_outputs->push_back(output_str);
+    for (const std::vector<std::string>& section : outputs_for_result_type) {
+      combined_outputs->insert(combined_outputs->end(), section.begin(), section.end());
     }
   }
   return absl::OkStatus();
 }
 
 absl::Status TestCaseOutputs::ParseFrom(const std::vector<std::string>& parts) {
+  // Firebolt Start
+  // An output can span several parts: `ALTERNATION GROUP: ...` naming a group, then that group's
+  // output, repeated per group. Only the first part of such a sequence carries the
+  // `<result type>[MODE]` header, so a part without one continues the section opened before it.
+  std::vector<TestCaseMode> open_modes;
+  std::string open_result_type;
+  bool section_open = false;
+  // Firebolt End
   for (const std::string& part : parts) {
     FirstLineParseResult parse_result;
     FILE_BASED_TEST_DRIVER_RETURN_IF_ERROR(ParseFirstLine(part, &parse_result));
@@ -249,16 +299,36 @@ absl::Status TestCaseOutputs::ParseFrom(const std::vector<std::string>& parts) {
                              parse_result.test_modes.end());
       continue;
     }
+    const bool has_header = !parse_result.first_line.empty() &&
+                            absl::StartsWith(parse_result.first_line, "<");
     const std::string output = std::string(parse_result.remainder);
-    if (parse_result.test_modes.empty()) {
-      FILE_BASED_TEST_DRIVER_RETURN_IF_ERROR(
-          AddOutputInternal(TestCaseMode(), parse_result.result_type, output))
-          << part;
-    } else {
-      for (const TestCaseMode& test_mode : parse_result.test_modes) {
+    if (has_header || !section_open) {
+      open_modes = parse_result.test_modes;
+      open_result_type = parse_result.result_type;
+      section_open = true;
+      if (open_modes.empty()) {
         FILE_BASED_TEST_DRIVER_RETURN_IF_ERROR(
-            AddOutputInternal(test_mode, parse_result.result_type, output))
+            AddOutputInternal(TestCaseMode(), open_result_type, {output}))
             << part;
+      } else {
+        for (const TestCaseMode& test_mode : open_modes) {
+          FILE_BASED_TEST_DRIVER_RETURN_IF_ERROR(
+              AddOutputInternal(test_mode, open_result_type, {output}))
+              << part;
+        }
+      }
+      continue;
+    }
+    // Continuation of the open section: the part belongs to it verbatim, header and all.
+    if (open_modes.empty()) {
+      ModeResults* mode_results = file_based_test_driver_base::FindOrNull(outputs_, TestCaseMode());
+      FILE_BASED_TEST_DRIVER_RET_CHECK(mode_results != nullptr);
+      FILE_BASED_TEST_DRIVER_RET_CHECK(mode_results->AppendPart(open_result_type, part));
+    } else {
+      for (const TestCaseMode& test_mode : open_modes) {
+        ModeResults* mode_results = file_based_test_driver_base::FindOrNull(outputs_, test_mode);
+        FILE_BASED_TEST_DRIVER_RET_CHECK(mode_results != nullptr);
+        FILE_BASED_TEST_DRIVER_RET_CHECK(mode_results->AppendPart(open_result_type, part));
       }
     }
   }
@@ -288,7 +358,7 @@ absl::Status TestCaseOutputs::BreakOutAllModesOutputs(
   if (all_modes_output != nullptr) {
     for (const auto& result_and_output : *all_modes_output) {
       const std::string& result_type = result_and_output.first;
-      const std::string& output = result_and_output.second;
+      const std::vector<std::string>& output = result_and_output.second;
 
       for (const TestCaseMode& test_mode : test_modes) {
         ModeResults& result_type_to_output_map =
@@ -305,7 +375,7 @@ absl::Status TestCaseOutputs::GenerateAllModesOutputs(
     const TestCaseMode::UnorderedSet& test_modes) {
   // If an output appears in all test modes, remove the mode specific outputs
   // and add a 'all mode' output.
-  typedef absl::node_hash_map<std::string, TestCaseMode::UnorderedSet>
+  typedef std::map<std::vector<std::string>, TestCaseMode::UnorderedSet>
       OutputToModesMap;
   typedef absl::node_hash_map<std::string, OutputToModesMap>
       ResultTypeToOutputToModesMap;
@@ -318,7 +388,7 @@ absl::Status TestCaseOutputs::GenerateAllModesOutputs(
 
     for (const auto& result_and_output : mode_results) {
       const std::string& result_type = result_and_output.first;
-      const std::string& output = result_and_output.second;
+      const std::vector<std::string>& output = result_and_output.second;
 
       // Create the map entries if not present:
       TestCaseMode::UnorderedSet& modes =
@@ -331,7 +401,7 @@ absl::Status TestCaseOutputs::GenerateAllModesOutputs(
     const std::string& result_type = item.first;
     const OutputToModesMap& output_to_modes_map = item.second;
     for (const auto& output_modes : output_to_modes_map) {
-      const std::string& output = output_modes.first;
+      const std::vector<std::string>& output = output_modes.first;
       const TestCaseMode::UnorderedSet& modes = output_modes.second;
       if (modes == test_modes) {
         ModeResults& result_type_to_output_map =
@@ -423,20 +493,29 @@ size_t TestCaseOutputs::AdoptSatisfiedOutputs(
     const ModeResults* all_modes_results =
         file_based_test_driver_base::FindOrNull(expected.outputs_, TestCaseMode());
     // ModeResults hands out const iterators, so collect first and rewrite after the walk.
-    std::vector<std::pair<std::string, std::string>> adoptions;
-    for (const auto& [result_type, output] : mode_results) {
-      std::string expected_output;
+    std::vector<std::pair<std::string, std::vector<std::string>>> adoptions;
+    for (const auto& [result_type, parts] : mode_results) {
+      std::vector<std::string> expected_parts;
       const bool found =
           (expected_results != nullptr &&
-           expected_results->GetOutputForResultType(result_type, &expected_output)) ||
+           expected_results->GetOutputForResultType(result_type, &expected_parts)) ||
           (all_modes_results != nullptr &&
-           all_modes_results->GetOutputForResultType(result_type, &expected_output));
-      if (!found || expected_output == output) continue;
-      if (satisfies(expected_output, output)) adoptions.emplace_back(result_type, expected_output);
+           all_modes_results->GetOutputForResultType(result_type, &expected_parts));
+      if (!found || expected_parts == parts) continue;
+      // Compared part by part: a part that names an alternation group has to match exactly (it is a
+      // label, not output), the rest go through the lenient rules.
+      if (expected_parts.size() != parts.size()) continue;
+      bool all_satisfied = true;
+      for (size_t i = 0; i < parts.size() && all_satisfied; ++i) {
+        const bool names_group = absl::StartsWith(parts[i], "ALTERNATION GROUP");
+        all_satisfied = names_group ? expected_parts[i] == parts[i]
+                                    : satisfies(expected_parts[i], parts[i]);
+      }
+      if (all_satisfied) adoptions.emplace_back(result_type, expected_parts);
     }
-    for (const auto& [result_type, expected_output] : adoptions) {
+    for (const auto& [result_type, expected_parts] : adoptions) {
       const bool removed = mode_results.RemoveResultType(result_type);
-      const bool added = mode_results.AddOutput(result_type, expected_output);
+      const bool added = mode_results.AddOutput(result_type, expected_parts);
       if (removed && added) ++adopted;
     }
   }

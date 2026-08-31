@@ -27,6 +27,7 @@
 #include <vector>
 
 #include "absl/base/attributes.h"
+#include "absl/functional/function_ref.h"
 #include "absl/container/node_hash_map.h"
 #include "absl/status/status.h"
 #include "file_based_test_driver/test_case_mode.h"
@@ -167,6 +168,16 @@ class TestCaseOutputs {
 
   bool IsEmpty() const { return outputs_.empty(); }
 
+  // Firebolt Start
+  // Drops every recorded output, so one result object can be reused across attempts of a test case
+  // that asked to be rerun.
+  void Clear() {
+    outputs_.clear();
+    disabled_modes_.clear();
+    possible_modes_.clear();
+  }
+  // Firebolt End
+
   // Merges a list of actual TestCaseOutputs into an expected TestCaseOutputs.
   // The TestCaseOutputs in 'actual_outputs' should not contain 'all modes'
   // outputs. 'expected_outputs' may contain 'all modes' outputs.
@@ -195,6 +206,17 @@ class TestCaseOutputs {
       const TestCaseOutputs& expected_outputs,
       const std::vector<TestCaseOutputs>& actual_outputs,
       TestCaseOutputs* merged_outputs);
+
+  // Firebolt Start
+  // Replaces every output of this (actual) TestCaseOutputs that <expected> already satisfies -- per
+  // <satisfies>, which carries the test case's lenient comparison modes -- with the expected text,
+  // so the textual diff downstream sees no difference where those modes say there is none. Outputs
+  // <expected> has no counterpart for are left alone. Returns how many were replaced.
+  size_t AdoptSatisfiedOutputs(
+      const TestCaseOutputs& expected,
+      absl::FunctionRef<bool(absl::string_view /* expected */, absl::string_view /* actual */)>
+          satisfies);
+  // Firebolt End
 
  private:
   // Represents the output of a single Mode output. This contains a mapping

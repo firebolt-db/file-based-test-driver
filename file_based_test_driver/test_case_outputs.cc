@@ -410,6 +410,40 @@ absl::Status TestCaseOutputs::SetPossibleModes(
 }
 
 // static
+// Firebolt Start
+size_t TestCaseOutputs::AdoptSatisfiedOutputs(
+    const TestCaseOutputs& expected,
+    absl::FunctionRef<bool(absl::string_view, absl::string_view)> satisfies) {
+  size_t adopted = 0;
+  for (auto& [test_mode, mode_results] : outputs_) {
+    // An expected output declared for every mode ('all modes', the empty TestCaseMode) stands in for
+    // the mode-specific one, exactly as the merge treats it.
+    const ModeResults* expected_results =
+        file_based_test_driver_base::FindOrNull(expected.outputs_, test_mode);
+    const ModeResults* all_modes_results =
+        file_based_test_driver_base::FindOrNull(expected.outputs_, TestCaseMode());
+    // ModeResults hands out const iterators, so collect first and rewrite after the walk.
+    std::vector<std::pair<std::string, std::string>> adoptions;
+    for (const auto& [result_type, output] : mode_results) {
+      std::string expected_output;
+      const bool found =
+          (expected_results != nullptr &&
+           expected_results->GetOutputForResultType(result_type, &expected_output)) ||
+          (all_modes_results != nullptr &&
+           all_modes_results->GetOutputForResultType(result_type, &expected_output));
+      if (!found || expected_output == output) continue;
+      if (satisfies(expected_output, output)) adoptions.emplace_back(result_type, expected_output);
+    }
+    for (const auto& [result_type, expected_output] : adoptions) {
+      const bool removed = mode_results.RemoveResultType(result_type);
+      const bool added = mode_results.AddOutput(result_type, expected_output);
+      if (removed && added) ++adopted;
+    }
+  }
+  return adopted;
+}
+// Firebolt End
+
 absl::Status TestCaseOutputs::MergeOutputs(
     const TestCaseOutputs& expected_outputs,
     const std::vector<TestCaseOutputs>& actual_outputs,

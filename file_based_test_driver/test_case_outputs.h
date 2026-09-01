@@ -20,6 +20,7 @@
 #include <map>
 #include <memory>
 #include <set>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -27,6 +28,7 @@
 #include <vector>
 
 #include "absl/base/attributes.h"
+#include "absl/functional/function_ref.h"
 #include "absl/container/node_hash_map.h"
 #include "absl/status/status.h"
 #include "file_based_test_driver/test_case_mode.h"
@@ -89,6 +91,27 @@ namespace file_based_test_driver {
 // <result type 3>         # all modes: mode = ""
 // all mode output for result type 3
 //
+// Firebolt Start
+// The parts of a `<result type>[MODE]...` section header, as ParseFrom reads it.
+struct SectionHeader {
+  // The header line itself, pointing into the part it was parsed from.
+  absl::string_view line;
+  std::string result_type;
+  // The modes this section is for. Empty when the header names none, in which case the section
+  // stands for every mode.
+  std::vector<TestCaseMode> modes;
+  // Everything after the header line.
+  absl::string_view body;
+};
+
+// Parses the section header at the start of `part`, if it has one. A part whose first line merely
+// looks header-shaped is output -- a result header whose first column is named `<`, say -- and gives
+// nullopt, exactly as ParseFrom treats it. So does a malformed header, which ParseFrom itself
+// reports. Public so that a caller reading sections back out of a test file reads them the way
+// ParseFrom wrote them, instead of with a second parser of its own.
+std::optional<SectionHeader> ParseSectionHeader(absl::string_view part);
+// Firebolt End
+
 class TestCaseOutputs {
  public:
   TestCaseOutputs() = default;
@@ -147,6 +170,19 @@ class TestCaseOutputs {
                             absl::string_view result_type,
                             absl::string_view output);
 
+  // Firebolt Start
+  // Rewrites every recorded part through 'normalize'. Used to sort lines for [unsorted_output]
+  // before alternations are grouped, so that two alternations whose rows differ only in order count
+  // as one group -- as they do on the single-expected-output path (AlternationSet::Record).
+  void NormalizeOutputs(absl::FunctionRef<std::string(absl::string_view)> normalize);
+
+  // Records an output that is a sequence of parts: what an alternation group set looks like, where
+  // a part naming the group precedes each group's output.
+  absl::Status RecordOutputParts(const TestCaseMode& test_mode,
+                                 absl::string_view result_type,
+                                 std::vector<std::string> parts);
+  // Firebolt End
+
   // Disables a test mode.
   // Existing outputs for the disabled mode will be removed.
   absl::Status DisableTestMode(const TestCaseMode& disabled_mode);
@@ -166,6 +202,16 @@ class TestCaseOutputs {
   const TestCaseMode::Set& possible_modes() const { return possible_modes_; }
 
   bool IsEmpty() const { return outputs_.empty(); }
+
+  // Firebolt Start
+  // Drops every recorded output, so one result object can be reused across attempts of a test case
+  // that asked to be rerun.
+  void Clear() {
+    outputs_.clear();
+    disabled_modes_.clear();
+    possible_modes_.clear();
+  }
+  // Firebolt End
 
   // Merges a list of actual TestCaseOutputs into an expected TestCaseOutputs.
   // The TestCaseOutputs in 'actual_outputs' should not contain 'all modes'
@@ -196,59 +242,94 @@ class TestCaseOutputs {
       const std::vector<TestCaseOutputs>& actual_outputs,
       TestCaseOutputs* merged_outputs);
 
+  // Firebolt Start
+  // Replaces every output that <expected> already satisfies -- per <satisfies>, which carries the
+  // case's lenient comparison modes -- with the expected text, so the textual diff downstream sees
+  // no difference where those modes say there is none. Returns how many were replaced.
+  size_t AdoptSatisfiedOutputs(
+      const TestCaseOutputs& expected,
+      absl::FunctionRef<bool(absl::string_view /* expected */, absl::string_view /* actual */)>
+          satisfies);
+  // Firebolt End
+
  private:
-  // Represents the output of a single Mode output. This contains a mapping
-  // of results_type to the actual text output for the test for that mode and
-  // result_type.
+  // Represents the output of a single Mode output. This contains a mapping of results_type to the
+  // test's output for that mode and result_type -- as the sequence of parts it is written as, which
+  // is more than one when the output holds alternation groups.
   class ModeResults {
    public:
     bool operator==(const ModeResults& other) const {
-      return result_type_to_output_ == other.result_type_to_output_;
+      return result_type_to_parts_ == other.result_type_to_parts_;
     }
 
     // Removes the associated output for 'result_type'. Returns false if
     // no output has been added for 'result_type'.
     ABSL_MUST_USE_RESULT bool RemoveResultType(absl::string_view result_type) {
-      auto it = result_type_to_output_.find(result_type);
-      if (it == result_type_to_output_.end()) return false;
+      auto it = result_type_to_parts_.find(result_type);
+      if (it == result_type_to_parts_.end()) return false;
 
-      result_type_to_output_.erase(it);
+      result_type_to_parts_.erase(it);
       return true;
     }
 
-    // Fetches the text for 'result_type' and returns it in 'output'.
+    // Fetches the parts for 'result_type' and returns them in 'parts'.
     // Returns false if the given 'result_type' doesn't exist.
     ABSL_MUST_USE_RESULT bool GetOutputForResultType(
-        absl::string_view result_type, std::string* output) const {
-      auto it = result_type_to_output_.find(result_type);
-      if (it == result_type_to_output_.end()) return false;
+        absl::string_view result_type, std::vector<std::string>* parts) const {
+      auto it = result_type_to_parts_.find(result_type);
+      if (it == result_type_to_parts_.end()) return false;
 
-      *output = it->second;
+      *parts = it->second;
       return true;
     }
 
-    // Adds 'output' as text for the given 'result_type' if it doesn't exist.
-    // Returns true if 'output' was added.
+    // Adds 'parts' for the given 'result_type' if it doesn't exist.
+    // Returns true if they were added.
     ABSL_MUST_USE_RESULT bool AddOutput(absl::string_view result_type,
-                                        absl::string_view output) {
-      return file_based_test_driver_base::InsertIfNotPresent(&result_type_to_output_,
-                                     std::string(result_type),
-                                     std::string(output));
+                                        std::vector<std::string> parts) {
+      return file_based_test_driver_base::InsertIfNotPresent(
+          &result_type_to_parts_, std::string(result_type), std::move(parts));
     }
 
-    bool empty() const { return result_type_to_output_.empty(); }
+    // Firebolt Start
+    // An output is a sequence of parts rather than one part, so that alternation groups can be
+    // written the way the single-expected-output path writes them: an `ALTERNATION GROUP: ...` part
+    // naming the group, then that group's output, `--`-separated in the file.
 
-    absl::node_hash_map<std::string, std::string>::const_iterator begin()
-        const {
-      return result_type_to_output_.begin();
+    // Appends one more part to 'result_type', which must already exist.
+    ABSL_MUST_USE_RESULT bool AppendPart(absl::string_view result_type,
+                                         absl::string_view part) {
+      auto it = result_type_to_parts_.find(result_type);
+      if (it == result_type_to_parts_.end()) return false;
+      it->second.emplace_back(part);
+      return true;
     }
 
-    absl::node_hash_map<std::string, std::string>::const_iterator end() const {
-      return result_type_to_output_.end();
+    // Replaces the parts for 'result_type', which must already exist.
+    ABSL_MUST_USE_RESULT bool SetOutput(absl::string_view result_type,
+                                        std::vector<std::string> parts) {
+      auto it = result_type_to_parts_.find(result_type);
+      if (it == result_type_to_parts_.end()) return false;
+      it->second = std::move(parts);
+      return true;
+    }
+    // Firebolt End
+
+    bool empty() const { return result_type_to_parts_.empty(); }
+
+    absl::node_hash_map<std::string, std::vector<std::string>>::const_iterator
+    begin() const {
+      return result_type_to_parts_.begin();
+    }
+
+    absl::node_hash_map<std::string, std::vector<std::string>>::const_iterator
+    end() const {
+      return result_type_to_parts_.end();
     }
 
    private:
-    absl::node_hash_map<std::string, std::string> result_type_to_output_;
+    absl::node_hash_map<std::string, std::vector<std::string>>
+        result_type_to_parts_;
   };
 
   using TestModeOutputsMap = TestCaseMode::UnorderedMap<ModeResults>;
@@ -262,7 +343,7 @@ class TestCaseOutputs {
   // output exists for this result type.
   absl::Status AddOutputInternal(const TestCaseMode& test_mode,
                                  absl::string_view result_type,
-                                 absl::string_view output);
+                                 std::vector<std::string> parts);
 
   // Whether this TestCaseOutputs has 'all modes' outputs (empty test mode).
   bool HasAllModesResult() const;

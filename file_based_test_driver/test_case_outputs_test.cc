@@ -131,19 +131,25 @@ TEST_F(TestCaseOutputsTest, WhiteSpaces) {
   EXPECT_THAT(actual_outputs, ContainerEq(expected));
 }
 
-TEST_F(TestCaseOutputsTest, AddOutputTwice) {
+// Firebolt: an output can span several parts -- that is how alternation groups are written -- so a
+// part without a header of its own continues the output before it instead of starting a second one
+// for the same (mode, result type). Duplicates are still caught where they are visible as such: two
+// parts carrying the same header, see AddDifferentOutput below.
+TEST_F(TestCaseOutputsTest, PartWithoutHeaderContinuesTheOutput) {
   TestCaseOutputs outputs;
   std::vector<std::string> parts = {
+      "<TYPE A>[MODE 1]\nALTERNATION GROUP: 1\n",
+      "first group output\n",
       "main test output",
-      "main test output",
+      "continued main test output",
   };
 
-  EXPECT_THAT(
-      outputs.ParseFrom(parts),
-      StatusIs(
-          _, HasSubstr("An output already exists for mode '', result type '':\n"
-                       "first output:\nmain test output\nsecond output:\nmain "
-                       "test output")));
+  FILE_BASED_TEST_DRIVER_ASSERT_OK(outputs.ParseFrom(parts));
+
+  std::vector<std::string> actual_outputs;
+  FILE_BASED_TEST_DRIVER_ASSERT_OK(
+      outputs.GetCombinedOutputs(false /* include_possible_modes*/, &actual_outputs));
+  EXPECT_THAT(actual_outputs, ContainerEq(parts));
 }
 
 TEST_F(TestCaseOutputsTest, AddDifferentOutput) {
@@ -193,28 +199,22 @@ TEST_F(TestCaseOutputsTest, ModeSpecificOutputExists) {
                                     "mode 1 output")));
 }
 
-TEST_F(TestCaseOutputsTest, ExtraTextAfterResultType) {
-  TestCaseOutputs outputs;
-  std::vector<std::string> parts = {
-      "<TYPE A>some extra text",
-  };
+// Firebolt: a first line that is not a complete header is output rather than a broken header, because
+// a test's own output may be `<...>`-shaped -- a result header whose first column is named `<`, say.
+// Only `<result type>` followed by zero or more `[MODE]` groups and nothing else is a header.
+TEST_F(TestCaseOutputsTest, FirstLineThatIsNotAHeaderIsOutput) {
+  for (const std::string& part : {std::string("<TYPE A>some extra text"),
+                                  std::string("<>[TEST MODE"),
+                                  std::string("< INTEGER,> INTEGER\n1,2\n")}) {
+    TestCaseOutputs outputs;
+    std::vector<std::string> parts = {part};
+    FILE_BASED_TEST_DRIVER_ASSERT_OK(outputs.ParseFrom(parts)) << part;
 
-  EXPECT_THAT(outputs.ParseFrom(parts),
-              StatusIs(_, HasSubstr("A test mode must be enclosed in [] but "
-                                    "got: <TYPE A>some extra text")));
-}
-
-TEST_F(TestCaseOutputsTest, TestModeNotEnclosedInBrackets) {
-  TestCaseOutputs outputs;
-  std::vector<std::string> parts = {
-      "<>[TEST MODE",
-  };
-
-  EXPECT_THAT(
-      outputs.ParseFrom(parts),
-      StatusIs(
-          _, HasSubstr(
-                 "A test mode must be enclosed in [] but got: <>[TEST MODE")));
+    std::vector<std::string> actual_outputs;
+    FILE_BASED_TEST_DRIVER_ASSERT_OK(
+        outputs.GetCombinedOutputs(false /* include_possible_modes*/, &actual_outputs));
+    EXPECT_THAT(actual_outputs, ContainerEq(parts));
+  }
 }
 
 TEST_F(TestCaseOutputsTest, MergeOneModeOutput) {

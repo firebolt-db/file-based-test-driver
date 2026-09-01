@@ -104,6 +104,24 @@ class RunTestCaseResultBase {
     FILE_BASED_TEST_DRIVER_CHECK(first_execution_.has_value());
     return first_execution_.value();
   }
+
+  // Copies everything but the outputs: what the driver set before the callback (file, line, parts,
+  // alternation, first execution time) and what the test case set while it ran (the comparison
+  // flags). For a caller that runs a case through one result type and reports it through the other,
+  // as sql_test does -- it runs the ordinary path and reports one output per storage layer.
+  void CopyStateFrom(const RunTestCaseResultBase& other) {
+    ignore_test_output_ = other.ignore_test_output_;
+    rerun_test_if_failed_ = other.rerun_test_if_failed_;
+    first_execution_ = other.first_execution_;
+    filename_ = other.filename_;
+    line_ = other.line_;
+    parts_ = other.parts_;
+    test_alternation_ = other.test_alternation_;
+    expected_output_is_regex_ = other.expected_output_is_regex_;
+    compare_unsorted_result_ = other.compare_unsorted_result_;
+    output_has_header_ = other.output_has_header_;
+    ignore_error_message_ = other.ignore_error_message_;
+  }
   // Firebolt End
 
  private:

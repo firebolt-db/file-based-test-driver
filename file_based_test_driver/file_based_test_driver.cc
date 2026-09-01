@@ -112,19 +112,6 @@ constexpr absl::string_view kRootDir =
 // Returns if this is a new test file to write actual results into.
 // This makes it easy to make sure multiple wrong results from a single file
 // get written out.
-bool isNewTestFile(std::string filename) {
-
-  static std::unordered_set<std::string> seen{};
-
-  if (seen.contains(filename)) {
-    return false;
-  } else {
-    seen.insert(std::move(filename));
-    return true;
-  }
-
-}
-
 // Firebolt End
 
 }  // namespace
@@ -336,6 +323,46 @@ std::vector<std::string> CollapseAllOkResultParts(std::vector<std::string> parts
   return parts;
 }
 
+// Firebolt Start
+// Collapses a PG-style multi-line ERROR block (and the single-line engine equivalent) to a bare
+// `ERROR` token, which is what [ignore_error_message] compares on.
+static void CollapseErrorBlocks(std::string* text) {
+  // One ERROR: line plus any number of immediately-following LINE/HINT/DETAIL/CONTEXT/QUERY/^ lines.
+  static const re2_st::RE2 kErrorBlock{
+      R"((?m)^ERROR:[^\n]*(?:\n(?:LINE [0-9]+:|HINT:|DETAIL:|CONTEXT:|QUERY:|STATEMENT:|[ \t]*\^)[^\n]*)*)"};
+  re2_st::RE2::GlobalReplace(text, kErrorBlock, "ERROR");
+}
+
+// True when <actual> satisfies <expected> under the lenient comparison modes the case asked for.
+// Applied per (test mode, result type) body: a serialized section carries a `<result type>[MODE]`
+// header, which is neither sortable nor a valid regex.
+static bool OutputSatisfiesExpected(absl::string_view expected, absl::string_view actual,
+                                    bool expected_output_is_regex,
+                                    bool compare_unsorted_result, bool output_has_header,
+                                    bool ignore_error_message) {
+  if (expected_output_is_regex) {
+    return re2_st::RE2::FullMatch(std::string(actual), std::string(expected));
+  }
+  // The all-OK collapse is unconditional, as it is for whole files: a result of nothing but OKs
+  // compares equal however many statements produced them.
+  const auto collapse_all_ok = [](absl::string_view body) {
+    std::vector<std::string> parts = {std::string(), std::string(body)};
+    return CollapseAllOkResultParts(std::move(parts))[1];
+  };
+  std::string expected_text = collapse_all_ok(expected);
+  std::string actual_text = collapse_all_ok(actual);
+  if (compare_unsorted_result) {
+    expected_text = SortLines(expected_text, output_has_header);
+    actual_text = SortLines(actual_text, output_has_header);
+  }
+  if (ignore_error_message) {
+    CollapseErrorBlocks(&expected_text);
+    CollapseErrorBlocks(&actual_text);
+  }
+  return expected_text == actual_text;
+}
+// Firebolt End
+
 // Compares the expected output ('expected_string') with the actual output
 // ('output_string') and returns true if diff is found. Also appends the
 // actual output to 'all_output'.
@@ -426,12 +453,8 @@ static bool CompareAndAppendOutput(
   // Firebolt's executor emits a single `ERROR: <message>` line. We want
   // both shapes to count as identical "this errored".
   if (ignore_error_message) {
-    // The pattern matches one ERROR: line and any number of
-    // immediately-following LINE/HINT/DETAIL/CONTEXT/QUERY/^ lines.
-    static const re2_st::RE2 kErrorBlock{
-        R"((?m)^ERROR:[^\n]*(?:\n(?:LINE [0-9]+:|HINT:|DETAIL:|CONTEXT:|QUERY:|STATEMENT:|[ \t]*\^)[^\n]*)*)"};
-    re2_st::RE2::GlobalReplace(&output_string_for_diff, kErrorBlock, "ERROR");
-    re2_st::RE2::GlobalReplace(&expected_string_for_diff, kErrorBlock, "ERROR");
+    CollapseErrorBlocks(&output_string_for_diff);
+    CollapseErrorBlocks(&expected_string_for_diff);
   }
   // Firebolt End
   if (!absl::GetFlag(FLAGS_file_based_test_driver_ignore_regex).empty()) {
@@ -559,9 +582,12 @@ static bool CompareAndAppendOutput(
   if (absl::GetFlag(FLAGS_fb_write_actual)) {
     // Figure out if we need to create a new _actual file or can use
     // the existing one.
-    std::string out_file = std::string(filename) + "_actual";
-    auto mode =
-        isNewTestFile(out_file) ? std::ios_base::out : std::ios_base::app;
+    // Truncate on the first case of this run over the file and append afterwards. Keyed on the
+    // output accumulated so far, which is per run over one file, rather than on whether the process
+    // has ever written this _actual: a second run over the same file -- an [include=...], or a suite
+    // that runs each file once per storage layer -- has to start a fresh file, not append to the
+    // previous run's.
+    auto mode = all_output->empty() ? std::ios_base::out : std::ios_base::app;
 
     // Write results to the file.
     actual.open(std::string(filename) + "_actual", mode);
@@ -1237,14 +1263,32 @@ bool RunOneTestCase<RunTestCaseWithModesResult, RunTestCaseWithModesOutput>(
     test_result.set_line(start_line_number + 1);
     test_result.set_parts(*parts);
     test_result.set_first_execution_time(std::chrono::steady_clock::now());
-    FILE_BASED_TEST_DRIVER_CHECK_OK(internal::RunAlternations(&test_result, run_test_case));
-    if (test_result.ignore_test_output()) {
-      ignore_test_output = true;
-    } else {
-      FILE_BASED_TEST_DRIVER_CHECK_OK(TestCaseOutputs::MergeOutputs(expected_outputs,
-                                             {test_result.test_case_outputs()},
-                                             &merged_outputs));
+    // Firebolt Start
+    // Runs the case, then applies what the single-expected-output path applies: the lenient
+    // comparison modes -- where they are satisfied the actual output adopts the expected text, so
+    // the diff below sees no difference -- and [wait_for_success_timeout_seconds=...], whose retries
+    // rebuild the outputs while the result keeps its first-execution time.
+    while (true) {
+      FILE_BASED_TEST_DRIVER_CHECK_OK(internal::RunAlternations(&test_result, run_test_case));
+      if (test_result.ignore_test_output()) {
+        ignore_test_output = true;
+        break;
+      }
+      test_result.mutable_test_case_outputs()->AdoptSatisfiedOutputs(
+          expected_outputs, [&test_result](absl::string_view expected, absl::string_view actual) {
+            return internal::OutputSatisfiesExpected(expected, actual,
+                                           test_result.expected_output_is_regex(),
+                                           test_result.compare_unsorted_result(),
+                                           test_result.output_has_header(),
+                                           test_result.ignore_error_message());
+          });
+      merged_outputs = TestCaseOutputs();
+      FILE_BASED_TEST_DRIVER_CHECK_OK(TestCaseOutputs::MergeOutputs(
+          expected_outputs, {test_result.test_case_outputs()}, &merged_outputs));
+      if (!test_result.rerun_test_if_failed() || merged_outputs == expected_outputs) break;
+      test_result.mutable_test_case_outputs()->Clear();
     }
+    // Firebolt End
   }
 
   // If the callback set the 'ignore_test_output' boolean to true,

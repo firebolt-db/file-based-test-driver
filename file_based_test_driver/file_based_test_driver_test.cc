@@ -648,10 +648,12 @@ line 7
 # Case using alterations.
 line {{1|3}}
 --
-<{1}>
+ALTERNATION GROUP: 1
+--
 Line 2
 --
-<{3}>
+ALTERNATION GROUP: 3
+--
 No match for line 3
 ==
 # Case where alternations have duplicate outputs.
@@ -661,39 +663,60 @@ Line 2
 ==
 sum {{1|2}} {{1|2}}
 --
-<{1,1}>
+ALTERNATION GROUP: 1,1
+--
 sum 2
 --
-<{1,2}{2,1}>
+ALTERNATION GROUPS:
+    1,2
+    2,1
+--
 sum 3
 --
-<{2,2}>
+ALTERNATION GROUP: 2,2
+--
 sum 4
 ==
 # Case with alternation and multiple outputs per alternation.
 line 1{{1|}}
 --
-<output1{1}>
+ALTERNATION GROUP: <empty>
+--
+Line 2
+--
+<output1>
+ALTERNATION GROUP: 1
+--
 Multiple
 --
-<output2{1}>
-Results
+<output2>
+ALTERNATION GROUP: 1
 --
-<{EMPTY}>
-Line 2
+Results
 ==
 # Case with multiple alternations, several of which have common results.
 # Group lists in each alternation group are in their generated order,
 # the list of groups is ordered by their first element.
 sum {{1|3}} {{2|}} {{|0}}
 --
-<{1,2,}{1,2,0}{3,,}{3,,0}>
+ALTERNATION GROUPS:
+    1,2,
+    1,2,0
+    3,,
+    3,,0
+--
 sum 3
 --
-<{1,,}{1,,0}>
+ALTERNATION GROUPS:
+    1,,
+    1,,0
+--
 sum 1
 --
-<{3,2,}{3,2,0}>
+ALTERNATION GROUPS:
+    3,2,
+    3,2,0
+--
 sum 5
 )";
 
@@ -762,6 +785,171 @@ Line 6
       test_file2.filename(),
       absl::bind_front(&RunTestCallbackWithModes, &num_callbacks)));
 }
+
+// Firebolt Start
+// Everything down to the End marker covers the per-mode path doing what the single-expected-output
+// path does. Both paths are in use -- the SQL suite runs every file through the per-mode one -- so a
+// feature that only works on the other path is a regression.
+
+// Records what the case named in the test input asks for, under MODE_A. `attempts` counts only the
+// rerun case's executions, so a rerun is visible to the test.
+static void RunLenientModesWithModesCallback(
+    int* attempts, absl::string_view test_case,
+    file_based_test_driver::RunTestCaseWithModesResult* test_result) {
+  FILE_BASED_TEST_DRIVER_ASSERT_OK_AND_ASSIGN(TestCaseMode mode, TestCaseMode::Create("MODE_A"));
+  const auto record = [&](absl::string_view output) {
+    FILE_BASED_TEST_DRIVER_EXPECT_OK(
+        test_result->mutable_test_case_outputs()->RecordOutput(mode, "", output));
+  };
+
+  if (absl::StartsWith(test_case, "regex")) {
+    test_result->set_expected_output_is_regex(true);
+    record("Value is 42\n");
+  } else if (absl::StartsWith(test_case, "unsorted")) {
+    test_result->set_compare_unsorted_result(true);
+    record("c\na\nb\n");
+  } else if (absl::StartsWith(test_case, "error")) {
+    test_result->set_ignore_error_message(true);
+    record("ERROR: a different message\nLINE 1: select 1\n");
+  } else if (absl::StartsWith(test_case, "all ok")) {
+    record("OK\n;\nOK\n;\nOK\n");
+  } else if (absl::StartsWith(test_case, "rerun")) {
+    test_result->rerun_test_if_failed(true);
+    record(absl::StrCat("attempt ", ++*attempts, "\n"));
+  } else if (absl::StartsWith(test_case, "one mode of two")) {
+    record("mode a output\n");
+  } else if (absl::StartsWith(test_case, "shuffled alternation")) {
+    test_result->set_compare_unsorted_result(true);
+    record(test_result->test_alternation() == "1" ? "a\nb\n" : "b\na\n");
+  } else if (absl::StartsWith(test_case, "alternation regex")) {
+    test_result->set_expected_output_is_regex(true);
+    record(absl::StrCat("value ", test_result->test_alternation(), "\n"));
+  } else {
+    record(absl::StrCat("No match for ", test_case));
+  }
+}
+
+// The lenient comparison modes, the rerun, and one section per mode, all on the per-mode path.
+TEST_F(TestdataUtilCallbackTest, LenientComparisonModesWithModes) {
+  const std::string test_file_contents =
+      R"(regex
+--
+Value is \d+
+==
+unsorted
+--
+a
+b
+c
+==
+error
+--
+ERROR: the message this case used to produce
+HINT: which is not compared
+==
+# A result of nothing but OKs compares equal however many statements produced it.
+all ok
+--
+OK
+==
+rerun
+--
+attempt 3
+==
+# Only the mode the run produced is compared; the other mode's section is kept as it is.
+one mode of two
+--
+<>[MODE_A]
+mode a output
+--
+<>[MODE_B]
+mode b output
+==
+# One regex covering every alternation group, rather than one section per group.
+alternation regex {{1|2}}
+--
+value \d
+==
+# Groups whose outputs differ only in line order are one group under [unsorted_output], so this case
+# keeps a single expected output rather than growing one section per group.
+shuffled alternation {{1|2}}
+--
+a
+b
+)";
+
+  internal::RegisteredTempFile test_file("testdata_util_test.test", test_file_contents);
+  int attempts = 0;
+  EXPECT_TEST_PASSES(RunTestCasesWithModesFromFiles(
+      test_file.filename(), absl::bind_front(&RunLenientModesWithModesCallback, &attempts)));
+  EXPECT_EQ(3, attempts);
+}
+
+// The same modes still fail when they are not satisfied -- they are lenient, not blind.
+TEST_F(TestdataUtilCallbackTest, LenientComparisonModesWithModesUnsatisfied) {
+  const std::vector<std::string> failing_files = {
+      // The regex does not match the actual output.
+      R"(regex
+--
+Value is [a-z]+
+)",
+      // Same multiset of lines is required, not just any lines.
+      R"(unsorted
+--
+a
+b
+d
+)",
+      // [ignore_error_message] collapses error blocks; it does not ignore a non-error difference.
+      R"(error
+--
+not an error at all
+)",
+      // The mode the run produced is compared, even though the other mode's section matches.
+      R"(one mode of two
+--
+<>[MODE_A]
+some other output
+--
+<>[MODE_B]
+mode a output
+)"};
+
+  for (const std::string& contents : failing_files) {
+    SCOPED_TRACE(contents);
+    internal::RegisteredTempFile test_file("testdata_util_test.test", contents);
+    int attempts = 0;
+    EXPECT_TEST_FAILS(RunTestCasesWithModesFromFiles(
+        test_file.filename(), absl::bind_front(&RunLenientModesWithModesCallback, &attempts)));
+  }
+}
+
+// The _actual file belongs to one run over one file: a second run over the same file starts it
+// afresh rather than appending to what the first wrote. A suite that runs each file once per storage
+// layer, and an [include=...], both do exactly that.
+TEST_F(TestdataUtilCallbackTest, ActualFileIsFreshPerRunOverAFile) {
+  const std::string test_file_contents =
+      R"(line 1
+--
+this is not what the callback produces
+)";
+
+  internal::RegisteredTempFile test_file("testdata_util_test.test", test_file_contents);
+  int num_callbacks = 0;
+  const auto run = [&] {
+    EXPECT_TEST_FAILS(RunTestCasesWithModesFromFiles(
+        test_file.filename(), absl::bind_front(&RunTestCallbackWithModes, &num_callbacks)));
+  };
+  run();
+  run();
+
+  std::string actual;
+  FILE_BASED_TEST_DRIVER_ASSERT_OK(
+      internal::GetContents(test_file.filename() + "_actual", &actual));
+  EXPECT_EQ("line 1\n--\nLine 2\n", actual);
+  remove((test_file.filename() + "_actual").c_str());
+}
+// Firebolt End
 
 static void RunRegexTestCallback(
     int* num_callbacks, absl::string_view test_case,

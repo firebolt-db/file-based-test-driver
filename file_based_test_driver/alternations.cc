@@ -15,8 +15,8 @@
 //
 #include "file_based_test_driver/alternations.h"
 #include "absl/container/flat_hash_map.h"
-#include <algorithm>
-#include <limits>
+#include "absl/container/flat_hash_set.h"
+#include <string_view>
 
 #include "absl/strings/str_join.h"
 #include "re2_st/re2.h"
@@ -246,26 +246,25 @@ absl::Status AlternationSetWithModes::CombineAlternations(
     const TestCaseMode& mode, const std::string& result_type,
     const OutputToAlternationNameMap& output_map,
     TestCaseOutputs* test_case_outputs) {
-  // Ordered by the first alternation that produced each output, so the groups appear in the order
-  // the alternations ran -- as they do on the single-expected-output path.
-  absl::flat_hash_map<std::string, size_t> index_of_name;
-  for (size_t i = 0; i < alternations_.size(); ++i) {
-    index_of_name.try_emplace(alternations_[i].name, i);
-  }
-  std::vector<const std::pair<const std::vector<std::string>, std::vector<std::string>>*> groups;
-  groups.reserve(output_map.size());
-  for (const auto& output_and_names : output_map) groups.push_back(&output_and_names);
-  const auto first_index = [&index_of_name](const std::vector<std::string>& names) {
-    size_t first = std::numeric_limits<size_t>::max();
-    for (const std::string& name : names) {
-      const auto it = index_of_name.find(name);
-      if (it != index_of_name.end()) first = std::min(first, it->second);
+  // Emitted in the order the alternations ran, as the single-expected-output path emits them: walk
+  // the alternations and take each group the first time one of its names comes up. One pass over the
+  // names either way -- a test can have dozens of groups, so this does not sort them.
+  using Group = OutputToAlternationNameMap::value_type;
+  absl::flat_hash_map<std::string_view, const Group*> group_of_name;
+  for (const Group& output_and_names : output_map) {
+    for (const std::string& name : output_and_names.second) {
+      group_of_name.try_emplace(name, &output_and_names);
     }
-    return first;
-  };
-  std::sort(groups.begin(), groups.end(), [&first_index](const auto* a, const auto* b) {
-    return first_index(a->second) < first_index(b->second);
-  });
+  }
+  std::vector<const Group*> groups;
+  groups.reserve(output_map.size());
+  absl::flat_hash_set<const Group*> seen;
+  seen.reserve(output_map.size());
+  for (const NameAndAlternationOutput& alternation : alternations_) {
+    const auto it = group_of_name.find(alternation.name);
+    if (it == group_of_name.end()) continue;  // this alternation produced no output of this type
+    if (seen.insert(it->second).second) groups.push_back(it->second);
+  }
 
   std::vector<std::string> parts;
   for (const auto* output_and_names : groups) {

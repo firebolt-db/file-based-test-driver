@@ -365,6 +365,15 @@ void BreakStringIntoAlternations(
     absl::string_view input, std::vector<std::pair<std::string, std::string>>*
                                  alternation_values_and_expanded_inputs);
 
+// Firebolt Start
+// True when <actual> satisfies <expected> under the comparison modes the case asked for:
+// [output_is_regex], [unsorted_output] and [ignore_error_message]. Exposed so that a caller asking
+// "would this case pass now?" gets the driver's own verdict, not exact string equality.
+bool OutputSatisfiesExpected(absl::string_view expected, absl::string_view actual,
+                             bool expected_output_is_regex, bool compare_unsorted_result,
+                             bool output_has_header, bool ignore_error_message);
+// Firebolt End
+
 }  // namespace internal
 }  // namespace file_based_test_driver
 

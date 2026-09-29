@@ -336,10 +336,9 @@ static void CollapseErrorBlocks(std::string* text) {
 // True when <actual> satisfies <expected> under the lenient comparison modes the case asked for.
 // Applied per (test mode, result type) body: a serialized section carries a `<result type>[MODE]`
 // header, which is neither sortable nor a valid regex.
-static bool OutputSatisfiesExpected(absl::string_view expected, absl::string_view actual,
-                                    bool expected_output_is_regex,
-                                    bool compare_unsorted_result, bool output_has_header,
-                                    bool ignore_error_message) {
+bool OutputSatisfiesExpected(absl::string_view expected, absl::string_view actual,
+                             bool expected_output_is_regex, bool compare_unsorted_result,
+                             bool output_has_header, bool ignore_error_message) {
   if (expected_output_is_regex) {
     return re2_st::RE2::FullMatch(std::string(actual), std::string(expected));
   }

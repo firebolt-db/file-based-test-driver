@@ -99,8 +99,9 @@ absl::Status ParseFirstLine(const absl::string_view part,
     // rather than left to ParseModes, because a test's own output may begin `<...>`-shaped -- a
     // result header whose first column is named `<` -- and that is output, not a broken header.
     // Whitespace around the mode groups is tolerated, as it was before this was matched whole.
-    if (!re2_st::RE2::FullMatch(stripped_first_line, R"(^<([^>]*)>\s*((?:\[[^\]]*\]\s*)*)$)",
-                                &result->result_type, &test_modes_sp)) {
+    static re2_st::LazyRE2 header = {R"(^<([^>]*)>\s*((?:\[[^\]]*\]\s*)*)$)"};
+    if (!re2_st::RE2::FullMatch(stripped_first_line, *header, &result->result_type,
+                                &test_modes_sp)) {
       return absl::OkStatus();
     }
     result->is_header = true;

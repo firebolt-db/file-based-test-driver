@@ -174,7 +174,8 @@ absl::Status GetNextTestCase(const std::vector<std::string>& lines,
     // This code first does a very cheap check (StartsWith) before proceeding
     // with the more expensive RE2 check; don't remove the cheap check unless
     // the replacement is also cheap!
-    if (absl::StartsWith(line, "--") && re2_st::RE2::FullMatch(line, "\\-\\-\\s*")) {
+    static re2_st::LazyRE2 separator = {"\\-\\-\\s*"};
+    if (absl::StartsWith(line, "--") && re2_st::RE2::FullMatch(line, *separator)) {
       parts->push_back(current_part);
       comments->push_back({current_comment_start, current_comment_end});
       current_part.clear();
